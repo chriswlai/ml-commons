@@ -342,4 +342,12 @@ public final class MLCommonsSettings {
     /** This setting sets the remote metadata service name */
     public static final Setting<String> REMOTE_METADATA_SERVICE_NAME = Setting
         .simpleString("plugins.ml_commons." + REMOTE_METADATA_SERVICE_NAME_KEY, Setting.Property.NodeScope, Setting.Property.Final);
+
+    // Feature flag for enabling telemetry tracer
+    public static final Setting<Boolean> ML_COMMONS_AGENT_TRACING_FEATURE_ENABLED = Setting
+        .boolSetting("plugins.ml_commons.agent_tracing_feature_enabled", false, Setting.Property.NodeScope, Setting.Property.Final);
+
+    // Feature flag for enabling telemetry agent tracing
+    public static final Setting<Boolean> ML_COMMONS_AGENT_TRACING_ENABLED = Setting
+        .boolSetting("plugins.ml_commons.agent_tracing_enabled", false, Setting.Property.NodeScope, Setting.Property.Dynamic);
 }

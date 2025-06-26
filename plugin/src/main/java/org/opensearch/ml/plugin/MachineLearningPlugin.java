@@ -757,19 +757,24 @@ public class MachineLearningPlugin extends Plugin
 
         MLBatchTaskUpdateJobRunner.getJobRunnerInstance().initialize(clusterService, threadPool, client);
 
-        // Initialize MLAgentTracer
-        log
-            .info(
-                "Initializing MLAgentTracer - Tracer details: [type: {}, implementation: {}], Feature settings: {}",
-                tracer != null ? tracer.getClass().getName() : "null",
-                tracer != null ? tracer.toString() : "null",
-                mlFeatureEnabledSetting != null ? mlFeatureEnabledSetting.toString() : "null"
-            );
-        MLAgentTracer.initialize(tracer, mlFeatureEnabledSetting);
+        // // Initialize MLAgentTracer
+        // log
+        //     .info(
+        //         "Initializing MLAgentTracer - Tracer details: [type: {}, implementation: {}], Feature settings: {}",
+        //         tracer != null ? tracer.getClass().getName() : "null",
+        //         tracer != null ? tracer.toString() : "null",
+        //         mlFeatureEnabledSetting != null ? mlFeatureEnabledSetting.toString() : "null"
+        //     );
+        // MLAgentTracer.initialize(tracer, mlFeatureEnabledSetting);
 
-        // Set tracer in MLAgentExecutor
-        log.info("Setting agent tracer in MLAgentExecutor - Tracer instance: [type: {}]", MLAgentTracer.getInstance().getClass().getName());
-        mlEngine.getAgentExecutor().setAgentTracer(MLAgentTracer.getInstance());
+        // // Set tracer in MLAgentExecutor
+        // log.info("Setting agent tracer in MLAgentExecutor - Tracer instance: [type: {}]", MLAgentTracer.getInstance().getClass().getName());
+        // mlEngine.getAgentExecutor().setAgentTracer(MLAgentTracer.getInstance());
+
+        MLAgentTracer.initialize(tracer, mlFeatureEnabledSetting);
+        if (mlFeatureEnabledSetting.isAgentTracingFeatureEnabled()) {
+            mlEngine.getAgentExecutor().setAgentTracer(MLAgentTracer.getInstance());
+        }
 
         return ImmutableList
             .of(
@@ -1108,7 +1113,9 @@ public class MachineLearningPlugin extends Plugin
                 MLCommonsSettings.REMOTE_METADATA_REGION,
                 MLCommonsSettings.REMOTE_METADATA_SERVICE_NAME,
                 MLCommonsSettings.ML_COMMONS_MCP_CONNECTOR_ENABLED,
-                MLCommonsSettings.ML_COMMONS_MCP_SERVER_ENABLED
+                MLCommonsSettings.ML_COMMONS_MCP_SERVER_ENABLED,
+                MLCommonsSettings.ML_COMMONS_AGENT_TRACING_FEATURE_ENABLED,
+                MLCommonsSettings.ML_COMMONS_AGENT_TRACING_ENABLED
             );
         return settings;
     }

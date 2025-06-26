@@ -92,6 +92,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
     private SdkClient sdkClient;
     private Encryptor encryptor;
     private final Tracer tracer;
+    private final MLAgentTracer agentTracer;
 
     // prompts
     private String plannerPrompt;
@@ -164,6 +165,9 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
         this.sdkClient = sdkClient;
         this.encryptor = encryptor;
         this.tracer = tracer;
+        this.agentTracer = org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_AGENT_TRACING_FEATURE_ENABLED.get(settings)
+            ? MLAgentTracer.getInstance()
+            : null;
         this.plannerPrompt = DEFAULT_PLANNER_PROMPT;
         this.plannerPromptTemplate = DEFAULT_PLANNER_PROMPT_TEMPLATE;
         this.reflectPrompt = DEFAULT_REFLECT_PROMPT;
@@ -259,7 +263,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
     @Override
     public void run(MLAgent mlAgent, Map<String, String> apiParams, ActionListener<Object> listener) {
         Map<String, String> agentAttributes = createAgentTaskAttributes(mlAgent.getName(), apiParams.get(QUESTION_FIELD));
-        Span agentTaskSpan = MLAgentTracer.getInstance().startSpan("agent.task", agentAttributes, null);
+        Span agentTaskSpan = agentTracer != null ? agentTracer.startSpan("agent.task", agentAttributes, null) : null;
         try {
             Map<String, String> allParams = new HashMap<>();
             allParams.putAll(apiParams);
@@ -268,7 +272,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
             String memoryId = allParams.get(MEMORY_ID_FIELD);
             String memoryType = mlAgent.getMemory().getType();
 
-            if (agentTaskSpan != null) {
+            if (agentTracer != null && agentTaskSpan != null) {
                 agentTaskSpan.addAttribute("gen_ai.agent.memory.id", memoryId != null ? memoryId : "");
                 agentTaskSpan.addAttribute("gen_ai.agent.memory.type", memoryType != null ? memoryType : "");
             }
@@ -299,39 +303,39 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                     setToolsAndRunAgent(mlAgent, allParams, completedSteps, memory, memory.getConversationId(), 
                         ActionListener.wrap(result -> {
                             // End agent task span after all work completes
-                            if (agentTaskSpan != null) {
-                                MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                            if (agentTracer != null && agentTaskSpan != null) {
+                                agentTracer.endSpan(agentTaskSpan);
                             }
                             listener.onResponse(result);
                         }, e -> {
                             // End agent task span even on error
-                            if (agentTaskSpan != null) {
+                            if (agentTracer != null && agentTaskSpan != null) {
                                 agentTaskSpan.setError(e);
-                                MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                                agentTracer.endSpan(agentTaskSpan);
                             }
                             listener.onFailure(e);
                         }), agentTaskSpan);
                 }, e -> {
                     log.error("Failed to get chat history", e);
-                    if (agentTaskSpan != null) {
+                    if (agentTracer != null && agentTaskSpan != null) {
                         agentTaskSpan.setError(e);
-                        MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                        agentTracer.endSpan(agentTaskSpan);
                     }
                     listener.onFailure(e);
                 }), messageHistoryLimit);
             }, e -> {
                 log.error("Failed to create memory", e);
-                if (agentTaskSpan != null) {
+                if (agentTracer != null && agentTaskSpan != null) {
                     agentTaskSpan.setError(e);
-                    MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                    agentTracer.endSpan(agentTaskSpan);
                 }
                 listener.onFailure(e);
             }));
         } catch (Exception e) {
             log.error("Error in MLPlanExecuteAndReflectAgentRunner", e);
-            if (agentTaskSpan != null) {
+            if (agentTracer != null && agentTaskSpan != null) {
                 agentTaskSpan.setError(e);
-                MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                agentTracer.endSpan(agentTaskSpan);
             }
             listener.onFailure(e);
         }
@@ -364,15 +368,15 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                     traceNumber,
                     ActionListener.wrap(result -> {
                         // End agent task span after all work completes
-                        if (agentTaskSpan != null) {
-                            MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                        if (agentTracer != null && agentTaskSpan != null) {
+                            agentTracer.endSpan(agentTaskSpan);
                         }
                         finalListener.onResponse(result);
                     }, e -> {
                         // End agent task span even on error
-                        if (agentTaskSpan != null) {
+                        if (agentTracer != null && agentTaskSpan != null) {
                             agentTaskSpan.setError(e);
-                            MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                            agentTracer.endSpan(agentTaskSpan);
                         }
                         finalListener.onFailure(e);
                     }),
@@ -389,9 +393,9 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
             }));
         } catch (Exception e) {
             log.error("Error in setToolsAndRunAgent", e);
-            if (agentTaskSpan != null) {
+            if (agentTracer != null && agentTaskSpan != null) {
                 agentTaskSpan.setError(e);
-                MLAgentTracer.getInstance().endSpan(agentTaskSpan);
+                agentTracer.endSpan(agentTaskSpan);
             }
             finalListener.onFailure(e);
         }
@@ -424,7 +428,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
         } else {
             planStepSpanName = String.format("agent.reflect_step_%d", stepsExecuted - 1);
         }
-        Span planStepSpan = MLAgentTracer.getInstance().startSpan(planStepSpanName, planStepAttributes, agentTaskSpan);
+        Span planStepSpan = agentTracer != null ? agentTracer.startSpan(planStepSpanName, planStepAttributes, agentTaskSpan) : null;
         
         try {
             int maxSteps = Integer.parseInt(allParams.getOrDefault(MAX_STEPS_EXECUTED_FIELD, DEFAULT_MAX_STEPS_EXECUTED));
@@ -446,14 +450,14 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                     null,
                     ActionListener.wrap(result -> {
                         // End plan step span after final result is saved
-                        if (planStepSpan != null) {
-                            MLAgentTracer.getInstance().endSpan(planStepSpan);
+                        if (agentTracer != null && planStepSpan != null) {
+                            agentTracer.endSpan(planStepSpan);
                         }
                         finalListener.onResponse(result);
                     }, e -> {
-                        if (planStepSpan != null) {
+                        if (agentTracer != null && planStepSpan != null) {
                             planStepSpan.setError(e);
-                            MLAgentTracer.getInstance().endSpan(planStepSpan);
+                            agentTracer.endSpan(planStepSpan);
                         }
                         finalListener.onFailure(e);
                     })
@@ -473,7 +477,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
             
             // Create LLM call span BEFORE making the actual LLM call
             Map<String, String> llmCallAttrs = AgentUtils.createLLMCallAttributes(llm.getModelId(), allParams.get(PROMPT_FIELD), "", 0, null);
-            Span llmCallSpan = MLAgentTracer.getInstance().startSpan("llm.call", llmCallAttrs, planStepSpan);
+            Span llmCallSpan = agentTracer != null ? agentTracer.startSpan("llm.call", llmCallAttrs, planStepSpan) : null;
             
             // Record start time for LLM latency calculation
             long llmStartTime = System.currentTimeMillis();
@@ -491,7 +495,9 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                     
                     // Update the span with the complete attributes
                     for (Map.Entry<String, String> entry : updatedLLMCallAttrs.entrySet()) {
-                        llmCallSpan.addAttribute(entry.getKey(), entry.getValue());
+                        if (agentTracer != null && llmCallSpan != null) {
+                            llmCallSpan.addAttribute(entry.getKey(), entry.getValue());
+                        }
                     }
                     
                     log.info("[AGENT_TRACE] LLM Call: Model: {} | Latency: {}ms", 
@@ -500,13 +506,15 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                     Map<String, String> parseLLMOutput = parseLLMOutput(allParams, modelTensorOutput);
                     
                     // End LLM call span after processing the response
-                    MLAgentTracer.getInstance().endSpan(llmCallSpan);
+                    if (agentTracer != null && llmCallSpan != null) {
+                        agentTracer.endSpan(llmCallSpan);
+                    }
                     
                     if (parseLLMOutput.get(RESULT_FIELD) != null) {
                         String finalResult = parseLLMOutput.get(RESULT_FIELD);
                         // End plan step span before saving final result
-                        if (planStepSpan != null) {
-                            MLAgentTracer.getInstance().endSpan(planStepSpan);
+                        if (agentTracer != null && planStepSpan != null) {
+                            agentTracer.endSpan(planStepSpan);
                         }
                         saveAndReturnFinalResult(
                             (ConversationIndexMemory) memory,
@@ -544,12 +552,14 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                         
                         // Record state transition to ReAct execution
                         Map<String, String> stateTransitionAttrs = AgentUtils.recordStateTransition("planner", "executor");
-                        Span stateTransitionSpan = MLAgentTracer.getInstance().startSpan("state.transition", stateTransitionAttrs, llmCallSpan);
-                        MLAgentTracer.getInstance().endSpan(stateTransitionSpan);
+                        Span stateTransitionSpan = agentTracer != null ? agentTracer.startSpan("state.transition", stateTransitionAttrs, llmCallSpan) : null;
+                        if (agentTracer != null && stateTransitionSpan != null) {
+                            agentTracer.endSpan(stateTransitionSpan);
+                        }
                         
                         // End plan step span BEFORE starting execute step
-                        if (planStepSpan != null) {
-                            MLAgentTracer.getInstance().endSpan(planStepSpan);
+                        if (agentTracer != null && planStepSpan != null) {
+                            agentTracer.endSpan(planStepSpan);
                         }
                         
                         log.info("[AGENT_TRACE] State Transition: From: {} | To: {}", "planning", "react_execution");
@@ -561,10 +571,10 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                         reactParamsObj.put("latency", 0); // Will be updated after execution
                         Map<String, String> toolExecAttrs = recordToolExecution("react_agent", reactParamsObj, null);
                         String executeStepSpanName = String.format("agent.execute_step_%d", stepsExecuted);
-                        Span executeStepSpan = MLAgentTracer.getInstance().startSpan(executeStepSpanName, toolExecAttrs, agentTaskSpan);
+                        Span executeStepSpan = agentTracer != null ? agentTracer.startSpan(executeStepSpanName, toolExecAttrs, agentTaskSpan) : null;
                         
                         // Create agent.conv span as child of execute step
-                        Span toolSpan = MLAgentTracer.getInstance().startSpan("agent.conv", toolExecAttrs, executeStepSpan);
+                        Span toolSpan = agentTracer != null ? agentTracer.startSpan("agent.conv", toolExecAttrs, executeStepSpan) : null;
                         
                         long reactStartTime = System.nanoTime();
                         client.execute(MLExecuteTaskAction.INSTANCE, executeRequest, ActionListener.wrap(executeResponse -> {
@@ -576,8 +586,10 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                 log.info("[AGENT_TRACE] Tool Execution: Tool: {} | Parameters: {} | Latency: {}ms", "react_agent", reactParams, reactLatencyMs);
                                 
                                 // Update the tool span with the actual latency and execution time
-                                toolSpan.addAttribute("gen_ai.tool.latency.ms", reactLatencyMs);
-                                toolSpan.addAttribute("gen_ai.tool.call.timestamp", System.currentTimeMillis());
+                                if (agentTracer != null && toolSpan != null) {
+                                    toolSpan.addAttribute("gen_ai.tool.latency.ms", reactLatencyMs);
+                                    toolSpan.addAttribute("gen_ai.tool.call.timestamp", System.currentTimeMillis());
+                                }
                                 
                                 // Record ReAct agent execution
                                 Map<String, Object> reactExecutionParams = new HashMap<>();
@@ -604,9 +616,13 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                 // Update the tool span with the meaningful result
                                 if (results.containsKey(STEP_RESULT_FIELD)) {
                                     String meaningfulResult = results.get(STEP_RESULT_FIELD);
-                                    toolSpan.addAttribute("gen_ai.tool.result", meaningfulResult);
+                                    if (agentTracer != null && toolSpan != null) {
+                                        toolSpan.addAttribute("gen_ai.tool.result", meaningfulResult);
+                                    }
                                 } else {
-                                    toolSpan.addAttribute("gen_ai.tool.result", "ReAct agent completed but no response found");
+                                    if (agentTracer != null && toolSpan != null) {
+                                        toolSpan.addAttribute("gen_ai.tool.result", "ReAct agent completed but no response found");
+                                    }
                                 }
                                 
                                 if (!results.containsKey(STEP_RESULT_FIELD)) {
@@ -637,8 +653,12 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                 useReflectPromptTemplate(allParams);
                                 
                                 // End execute step spans
-                                MLAgentTracer.getInstance().endSpan(toolSpan);
-                                MLAgentTracer.getInstance().endSpan(executeStepSpan);
+                                if (agentTracer != null && toolSpan != null) {
+                                    agentTracer.endSpan(toolSpan);
+                                }
+                                if (agentTracer != null && executeStepSpan != null) {
+                                    agentTracer.endSpan(executeStepSpan);
+                                }
                                 
                                 // Continue to next iteration
                                 executePlanningLoop(
@@ -655,30 +675,40 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                 );
                             } finally {
                                 // End spans even on error
-                                MLAgentTracer.getInstance().endSpan(toolSpan);
-                                MLAgentTracer.getInstance().endSpan(executeStepSpan);
+                                if (agentTracer != null && toolSpan != null) {
+                                    agentTracer.endSpan(toolSpan);
+                                }
+                                if (agentTracer != null && executeStepSpan != null) {
+                                    agentTracer.endSpan(executeStepSpan);
+                                }
                             }
                         }, e -> {
                             log.error("Failed to execute ReAct agent", e);
                             // End spans even on error
-                            MLAgentTracer.getInstance().endSpan(toolSpan);
-                            MLAgentTracer.getInstance().endSpan(executeStepSpan);
+                            if (agentTracer != null && toolSpan != null) {
+                                toolSpan.setError(e);
+                                agentTracer.endSpan(toolSpan);
+                            }
+                            if (agentTracer != null && executeStepSpan != null) {
+                                executeStepSpan.setError(e);
+                                agentTracer.endSpan(executeStepSpan);
+                            }
                             finalListener.onFailure(e);
                         }));
                     }
                 } catch (Exception e) {
                     log.error("Error in plan listener", e);
-                    if (planStepSpan != null) {
+                    if (agentTracer != null && planStepSpan != null) {
                         planStepSpan.setError(e);
-                        MLAgentTracer.getInstance().endSpan(planStepSpan);
+                        agentTracer.endSpan(planStepSpan);
                     }
                     finalListener.onFailure(e);
                 }
             }, e -> {
                 log.error("Failed to run deep research agent", e);
-                if (planStepSpan != null) {
+                if (agentTracer != null && planStepSpan != null) {
                     planStepSpan.setError(e);
-                    MLAgentTracer.getInstance().endSpan(planStepSpan);
+                    agentTracer.endSpan(planStepSpan);
                 }
                 finalListener.onFailure(e);
             });
@@ -686,9 +716,9 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
             client.execute(MLPredictionTaskAction.INSTANCE, request, planListener);
         } catch (Exception e) {
             log.error("Error in executePlanningLoop", e);
-            if (planStepSpan != null) {
+            if (agentTracer != null && planStepSpan != null) {
                 planStepSpan.setError(e);
-                MLAgentTracer.getInstance().endSpan(planStepSpan);
+                agentTracer.endSpan(planStepSpan);
             }
             finalListener.onFailure(e);
         }

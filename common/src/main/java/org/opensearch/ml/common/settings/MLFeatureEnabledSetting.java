@@ -15,6 +15,8 @@ import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_MUL
 import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_OFFLINE_BATCH_INFERENCE_ENABLED;
 import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_OFFLINE_BATCH_INGESTION_ENABLED;
 import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_REMOTE_INFERENCE_ENABLED;
+import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_AGENT_TRACING_FEATURE_ENABLED;
+import static org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_AGENT_TRACING_ENABLED;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +42,9 @@ public class MLFeatureEnabledSetting {
     // This is to identify if this node is in multi-tenancy or not.
     private volatile Boolean isMultiTenancyEnabled;
 
+    private volatile Boolean isAgentTracingFeatureEnabled;
+    private volatile Boolean isAgentTracingEnabled;
+
     private final List<SettingsChangeListener> listeners = new ArrayList<>();
 
     public MLFeatureEnabledSetting(ClusterService clusterService, Settings settings) {
@@ -51,6 +56,8 @@ public class MLFeatureEnabledSetting {
         isBatchIngestionEnabled = ML_COMMONS_OFFLINE_BATCH_INGESTION_ENABLED.get(settings);
         isBatchInferenceEnabled = ML_COMMONS_OFFLINE_BATCH_INFERENCE_ENABLED.get(settings);
         isMultiTenancyEnabled = ML_COMMONS_MULTI_TENANCY_ENABLED.get(settings);
+        isAgentTracingFeatureEnabled = ML_COMMONS_AGENT_TRACING_FEATURE_ENABLED.get(settings);
+        isAgentTracingEnabled = ML_COMMONS_AGENT_TRACING_ENABLED.get(settings);
 
         clusterService
             .getClusterSettings()
@@ -69,6 +76,7 @@ public class MLFeatureEnabledSetting {
         clusterService
             .getClusterSettings()
             .addSettingsUpdateConsumer(ML_COMMONS_OFFLINE_BATCH_INFERENCE_ENABLED, it -> isBatchInferenceEnabled = it);
+        clusterService.getClusterSettings().addSettingsUpdateConsumer(MLCommonsSettings.ML_COMMONS_AGENT_TRACING_ENABLED, it -> isAgentTracingEnabled = it);
     }
 
     /**
@@ -133,6 +141,14 @@ public class MLFeatureEnabledSetting {
 
     public void addListener(SettingsChangeListener listener) {
         listeners.add(listener);
+    }
+
+    public boolean isAgentTracingFeatureEnabled() {
+        return isAgentTracingFeatureEnabled;
+    }
+
+    public boolean isAgentTracingEnabled() {
+        return isAgentTracingEnabled;
     }
 
     @VisibleForTesting

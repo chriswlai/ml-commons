@@ -14,6 +14,7 @@ import org.opensearch.telemetry.tracing.attributes.Attributes;
 import lombok.extern.log4j.Log4j2;
 import java.util.Map;
 // import java.util.concurrent.ConcurrentHashMap;
+import org.opensearch.telemetry.tracing.noop.NoopTracer;
 
 @Log4j2
 public class MLAgentTracer extends AbstractMLTracer {
@@ -24,17 +25,29 @@ public class MLAgentTracer extends AbstractMLTracer {
         super(tracer, mlFeatureEnabledSetting);
     }
 
+    // public static synchronized void initialize(Tracer tracer, MLFeatureEnabledSetting mlFeatureEnabledSetting) {
+    //     log.info("Initializing MLAgentTracer with tracer: {} and feature enabled setting: {}",
+    //         tracer != null ? tracer.getClass().getSimpleName() : "null",
+    //         mlFeatureEnabledSetting != null ? mlFeatureEnabledSetting.toString() : "null");
+    //     instance = new MLAgentTracer(tracer, mlFeatureEnabledSetting);
+    //     log.info("MLAgentTracer initialized successfully");
+    // }
+
     public static synchronized void initialize(Tracer tracer, MLFeatureEnabledSetting mlFeatureEnabledSetting) {
-        log.info("Initializing MLAgentTracer with tracer: {} and feature enabled setting: {}",
-            tracer != null ? tracer.getClass().getSimpleName() : "null",
-            mlFeatureEnabledSetting != null ? mlFeatureEnabledSetting.toString() : "null");
-        instance = new MLAgentTracer(tracer, mlFeatureEnabledSetting);
-        log.info("MLAgentTracer initialized successfully");
+        if (mlFeatureEnabledSetting == null || !mlFeatureEnabledSetting.isAgentTracingFeatureEnabled()) {
+            // Static feature flag is off: do not initialize, do not trace at all
+            instance = null;
+            log.info("MLAgentTracer not initialized: agent tracing feature flag is disabled.");
+            return;
+        }
+        Tracer tracerToUse = mlFeatureEnabledSetting.isAgentTracingEnabled() ? tracer : NoopTracer.INSTANCE;
+        instance = new MLAgentTracer(tracerToUse, mlFeatureEnabledSetting);
+        log.info("MLAgentTracer initialized with {}", tracerToUse.getClass().getSimpleName());
     }
 
     public static synchronized MLAgentTracer getInstance() {
         if (instance == null) {
-            throw new IllegalStateException("MLAgentTracer is not initialized. Call initialize() first.");
+            throw new IllegalStateException("MLAgentTracer is not initialized. Call initialize() first or check feature flag.");
         }
         return instance;
     }
