@@ -66,6 +66,7 @@ import org.opensearch.ml.common.settings.SettingsChangeListener;
 import org.opensearch.ml.common.spi.memory.Memory;
 import org.opensearch.ml.common.spi.tools.Tool;
 import org.opensearch.ml.engine.Executable;
+import org.opensearch.ml.engine.algorithms.agent.tracing.MLAgentTracer;
 import org.opensearch.ml.engine.annotation.Function;
 import org.opensearch.ml.engine.encryptor.Encryptor;
 import org.opensearch.ml.engine.memory.ConversationIndexMemory;
@@ -114,6 +115,8 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
     private volatile Boolean isMultiTenancyEnabled;
     private Encryptor encryptor;
     private static volatile boolean mcpConnectorIsEnabled;
+
+    private MLAgentTracer agentTracer;
 
     public MLAgentExecutor(
         Client client,
@@ -528,7 +531,8 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                     toolFactories,
                     memoryFactoryMap,
                     sdkClient,
-                    encryptor
+                    encryptor,
+                    agentTracer != null ? agentTracer.getTracer() : null
                 );
             case PLAN_EXECUTE_AND_REFLECT:
                 return new MLPlanExecuteAndReflectAgentRunner(
@@ -539,7 +543,8 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
                     toolFactories,
                     memoryFactoryMap,
                     sdkClient,
-                    encryptor
+                    encryptor,
+                    agentTracer != null ? agentTracer.getTracer() : null
                 );
             default:
                 throw new IllegalArgumentException("Unsupported agent type: " + mlAgent.getType());
@@ -621,6 +626,18 @@ public class MLAgentExecutor implements Executable, SettingsChangeListener {
         } catch (Exception e) {
             log.error("Failed to update ML task {}", taskId, e);
             listener.onFailure(e);
+        }
+    }
+
+    public void setAgentTracer(MLAgentTracer agentTracer) {
+        log.info("Setting agent tracer in MLAgentExecutor: {}", agentTracer != null ? agentTracer.getClass().getSimpleName() : "null");
+        this.agentTracer = agentTracer;
+        if (agentTracer != null) {
+            log
+                .info(
+                    "Agent tracer initialized with tracer: {}",
+                    agentTracer.getTracer() != null ? agentTracer.getTracer().getClass().getSimpleName() : "null"
+                );
         }
     }
 }

@@ -931,4 +931,505 @@ public class AgentUtils {
             }
         }
     }
+
+    /**
+     * Create agent task attributes for span creation.
+     */
+    public static Map<String, String> createAgentTaskAttributes(String agentName, String userTask) {
+        Map<String, String> attributes = new HashMap<>();
+        attributes.put("service.name", "ml-agent");
+        attributes.put("service.type", "agent");
+        // Agent span conventions
+        attributes.put("gen_ai.operation.name", "create_agent"); // or invoke_agent, override as needed
+        if (agentName != null) {
+            attributes.put("gen_ai.agent.name", agentName);
+        }
+        // Add agent.id and agent.description if available (not present in current signature)
+        // Add more attributes if available (conversation id, data source id, output type, etc.)
+        attributes.put("gen_ai.agent.name", agentName != null ? agentName : "unknown_agent");
+        attributes.put("gen_ai.agent.task", userTask != null ? userTask : "");
+        attributes.put("gen_ai.agent.task.length", userTask != null ? String.valueOf(userTask.length()) : "0");
+        attributes.put("gen_ai.agent.task.timestamp", String.valueOf(System.currentTimeMillis()));
+        attributes.put("gen_ai.agent.framework", "plan-execute-reflect");
+        return attributes;
+    }
+
+    /**
+     * Create plan attributes for span creation.
+     */
+    public static Map<String, String> createPlanAttributes(int stepNumber, String modelId) {
+        Map<String, String> attributes = new HashMap<>();
+        attributes.put("service.name", "ml-agent");
+        attributes.put("service.type", "agent");
+        attributes.put("gen_ai.agent.phase", "planner");
+        attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
+        attributes.put("gen_ai.agent.step.type", "plan");
+        attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
+        attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
+        attributes.put("gen_ai.agent.plan.timestamp", String.valueOf(System.currentTimeMillis()));
+        return attributes;
+    }
+
+    /**
+     * Create execute step attributes for span creation.
+     */
+    public static Map<String, String> createExecuteStepAttributes(int stepNumber, String executorName) {
+        Map<String, String> attributes = new HashMap<>();
+        attributes.put("service.name", "ml-agent");
+        attributes.put("service.type", "agent");
+        attributes.put("gen_ai.agent.phase", "executor");
+        attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
+        attributes.put("gen_ai.agent.step.type", "execute");
+        attributes.put("gen_ai.agent.executor.name", executorName != null ? executorName : "");
+        attributes.put("gen_ai.agent.executor.type", "react_agent");
+        attributes.put("gen_ai.agent.execute.timestamp", String.valueOf(System.currentTimeMillis()));
+        return attributes;
+    }
+
+    /**
+     * Record state transition by creating attributes only (no span creation here).
+     */
+    public static Map<String, String> recordStateTransition(String fromState, String toState) {
+        Map<String, String> attributes = new HashMap<>();
+        attributes.put("service.name", "ml-agent");
+        attributes.put("service.type", "agent");
+        attributes.put("gen_ai.agent.state.transition.from", fromState != null ? fromState : "");
+        attributes.put("gen_ai.agent.state.transition.to", toState != null ? toState : "");
+        attributes.put("gen_ai.agent.state.transition.type", "agent_workflow");
+        attributes.put("gen_ai.agent.state.transition.timestamp", String.valueOf(System.currentTimeMillis()));
+        return attributes;
+    }
+
+    /**
+     * Record tool execution by creating attributes only (no span creation here).
+     */
+    public static Map<String, String> recordToolExecution(String toolName, Map<String, Object> parameters, Object result) {
+        Map<String, String> attributes = new HashMap<>();
+        // Tool span conventions
+        attributes.put("gen_ai.operation.name", "execute_tool");
+        attributes.put("gen_ai.tool.name", toolName != null ? toolName : "");
+        if (parameters != null && parameters.containsKey("tool_call_id")) {
+            attributes.put("gen_ai.tool.call.id", parameters.get("tool_call_id").toString());
+        }
+        if (parameters != null && parameters.containsKey("tool_description")) {
+            attributes.put("gen_ai.tool.description", parameters.get("tool_description").toString());
+        }
+        // Existing attributes
+        if (!parameters.isEmpty()) {
+            attributes.put("gen_ai.tool.parameters", parameters.toString());
+        }
+        if (result != null) {
+            if (result instanceof ModelTensorOutput) {
+                ModelTensorOutput modelOutput = (ModelTensorOutput) result;
+                StringBuilder resultBuilder = new StringBuilder();
+                if (modelOutput.getMlModelOutputs() != null && !modelOutput.getMlModelOutputs().isEmpty()) {
+                    for (int i = 0; i < modelOutput.getMlModelOutputs().size(); i++) {
+                        var output = modelOutput.getMlModelOutputs().get(i);
+                        if (output.getMlModelTensors() != null) {
+                            for (var tensor : output.getMlModelTensors()) {
+                                if (tensor.getName() != null) {
+                                    resultBuilder.append(tensor.getName()).append(": ");
+                                }
+                                if (tensor.getResult() != null) {
+                                    resultBuilder.append(tensor.getResult());
+                                } else if (tensor.getDataAsMap() != null) {
+                                    resultBuilder.append(tensor.getDataAsMap().toString());
+                                }
+                                resultBuilder.append("; ");
+                            }
+                        }
+                    }
+                }
+                String meaningfulResult = resultBuilder.toString().trim();
+                if (!meaningfulResult.isEmpty()) {
+                    attributes.put("gen_ai.tool.result", meaningfulResult);
+                } else {
+                    attributes.put("gen_ai.tool.result", "ModelTensorOutput with " + 
+                        (modelOutput.getMlModelOutputs() != null ? modelOutput.getMlModelOutputs().size() : 0) + " outputs");
+                }
+            } else {
+                String resultStr = result.toString();
+                if (resultStr.length() > 500) {
+                    resultStr = resultStr.substring(0, 500) + "...";
+                }
+                attributes.put("gen_ai.tool.result", resultStr);
+            }
+        } else {
+            attributes.put("gen_ai.tool.result", "null");
+        }
+        attributes.put("service.type", "agent");
+        // Add more useful attributes
+        if (parameters != null) {
+            if (parameters.containsKey("step")) {
+                attributes.put("gen_ai.agent.step", parameters.get("step").toString());
+            }
+            if (parameters.containsKey("agent_id")) {
+                attributes.put("gen_ai.agent.executor.id", parameters.get("agent_id").toString());
+            }
+        }
+        return attributes;
+    }
+
+    /**
+     * Record LLM operation by creating attributes only (no span creation here).
+     */
+    public static Map<String, String> recordLLMOperation(String modelId, String prompt, String completion, long latency) {
+        Map<String, String> attributes = new HashMap<>();
+        attributes.put("service.name", "ml-agent");
+        attributes.put("service.type", "agent"); // Not part of metrics conventions
+        attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
+        attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
+        // Add model span conventions
+        attributes.put("gen_ai.operation.name", "chat"); // Default to chat, override as needed
+        // Add more attributes if available (e.g., conversation id, output type, etc.)
+        // See below for full list
+        attributes.put("gen_ai.request.input", prompt != null ? prompt : "");
+        attributes.put("gen_ai.request.input.length", prompt != null ? String.valueOf(prompt.length()) : "0");
+        attributes.put("gen_ai.response.output", completion != null ? completion : "");
+        attributes.put("gen_ai.response.output.length", completion != null ? String.valueOf(completion.length()) : "0");
+        attributes.put("gen_ai.request.latency.ms", String.valueOf(latency));
+        attributes.put("gen_ai.operation.timestamp", String.valueOf(System.currentTimeMillis()));
+        return attributes;
+    }
+
+    /**
+     * Create attributes for LLM call span with comprehensive LLM information.
+     */
+    public static Map<String, String> createLLMCallAttributes(String modelId, String prompt, String completion, long latency, ModelTensorOutput modelTensorOutput) {
+        Map<String, String> attributes = new HashMap<>();
+        
+        // Basic LLM call information
+        attributes.put("service.name", "ml-agent");
+        attributes.put("service.type", "agent"); // Not part of metrics conventions
+        attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
+        attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
+        attributes.put("gen_ai.operation.name", "chat"); // Default to chat, override as needed
+        // Add more attributes if available (e.g., conversation id, output type, etc.)
+        attributes.put("gen_ai.request.input", prompt != null ? prompt : "");
+        attributes.put("gen_ai.request.input.length", prompt != null ? String.valueOf(prompt.length()) : "0");
+        attributes.put("gen_ai.response.output", completion != null ? completion : "");
+        attributes.put("gen_ai.response.output.length", completion != null ? String.valueOf(completion.length()) : "0");
+        attributes.put("gen_ai.request.latency.ms", String.valueOf(latency));
+        attributes.put("gen_ai.operation.timestamp", String.valueOf(System.currentTimeMillis()));
+        
+        // Extract token usage information from ModelTensorOutput
+        if (modelTensorOutput != null && modelTensorOutput.getMlModelOutputs() != null && !modelTensorOutput.getMlModelOutputs().isEmpty()) {
+            log.info("[AGENT_TRACE] ModelTensorOutput has {} outputs", modelTensorOutput.getMlModelOutputs().size());
+            
+            for (int i = 0; i < modelTensorOutput.getMlModelOutputs().size(); i++) {
+                var output = modelTensorOutput.getMlModelOutputs().get(i);
+                log.info("[AGENT_TRACE] Output {} has {} tensors", i, output.getMlModelTensors() != null ? output.getMlModelTensors().size() : 0);
+                
+                if (output.getMlModelTensors() != null) {
+                    for (int j = 0; j < output.getMlModelTensors().size(); j++) {
+                        var tensor = output.getMlModelTensors().get(j);
+                        log.info("[AGENT_TRACE] Tensor {} name: '{}', has dataAsMap: {}", j, tensor.getName(), tensor.getDataAsMap() != null);
+                        
+                        if (tensor.getDataAsMap() != null) {
+                            Map<String, ?> dataAsMap = tensor.getDataAsMap();
+                            log.info("[AGENT_TRACE] Tensor {} dataAsMap keys: {}", j, dataAsMap.keySet());
+                            
+                            // Log the full dataAsMap structure for debugging
+                            log.info("[AGENT_TRACE] Tensor {} full dataAsMap: {}", j, dataAsMap);
+                            
+                            // Extract usage information - usage is at root level of dataAsMap
+                            if (dataAsMap.containsKey("usage")) {
+                                Object usageObj = dataAsMap.get("usage");
+                                log.info("[AGENT_TRACE] Found usage object: {}", usageObj);
+                                
+                                if (usageObj instanceof Map) {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> usage = (Map<String, Object>) usageObj;
+                                    log.info("[AGENT_TRACE] Usage map keys: {}", usage.keySet());
+                                    
+                                    // Extract token counts based on provider format
+                                    String provider = attributes.get("gen_ai.system");
+                                    
+                                    // If provider is unknown, try to detect it from usage object structure
+                                    if ("unknown".equals(provider)) {
+                                        provider = detectProviderFromUsage(usage);
+                                        log.info("[AGENT_TRACE] Provider detected from usage structure: {}", provider);
+                                        // Update the provider attribute
+                                        attributes.put("gen_ai.system", provider);
+                                    }
+                                    
+                                    boolean isBedrock = "bedrock".equalsIgnoreCase(provider);
+                                    log.info("[AGENT_TRACE] Detected provider: {} (isBedrock: {})", provider, isBedrock);
+                                    
+                                    // Handle different field names for different providers
+                                    if (isBedrock) {
+                                        // Bedrock/Claude format: input_tokens, output_tokens (or inputTokens, outputTokens)
+                                        if (usage.containsKey("input_tokens")) {
+                                            Object inputTokens = usage.get("input_tokens");
+                                            attributes.put("gen_ai.usage.input_tokens", inputTokens.toString());
+                                            log.info("[AGENT_TRACE] Extracted input_tokens (Bedrock): {}", inputTokens);
+                                        } else if (usage.containsKey("inputTokens")) {
+                                            Object inputTokens = usage.get("inputTokens");
+                                            attributes.put("gen_ai.usage.input_tokens", inputTokens.toString());
+                                            log.info("[AGENT_TRACE] Extracted inputTokens (Bedrock): {}", inputTokens);
+                                        } else {
+                                            log.info("[AGENT_TRACE] input_tokens/inputTokens not found in Bedrock usage object");
+                                        }
+                                        
+                                        if (usage.containsKey("output_tokens")) {
+                                            Object outputTokens = usage.get("output_tokens");
+                                            attributes.put("gen_ai.usage.output_tokens", outputTokens.toString());
+                                            log.info("[AGENT_TRACE] Extracted output_tokens (Bedrock): {}", outputTokens);
+                                        } else if (usage.containsKey("outputTokens")) {
+                                            Object outputTokens = usage.get("outputTokens");
+                                            attributes.put("gen_ai.usage.output_tokens", outputTokens.toString());
+                                            log.info("[AGENT_TRACE] Extracted outputTokens (Bedrock): {}", outputTokens);
+                                        } else {
+                                            log.info("[AGENT_TRACE] output_tokens/outputTokens not found in Bedrock usage object");
+                                        }
+                                        
+                                        // Calculate total tokens for Bedrock
+                                        if ((usage.containsKey("input_tokens") || usage.containsKey("inputTokens")) && 
+                                            (usage.containsKey("output_tokens") || usage.containsKey("outputTokens"))) {
+                                            double inputTokens = 0.0;
+                                            double outputTokens = 0.0;
+                                            
+                                            if (usage.containsKey("input_tokens")) {
+                                                inputTokens = Double.parseDouble(usage.get("input_tokens").toString());
+                                            } else if (usage.containsKey("inputTokens")) {
+                                                inputTokens = Double.parseDouble(usage.get("inputTokens").toString());
+                                            }
+                                            
+                                            if (usage.containsKey("output_tokens")) {
+                                                outputTokens = Double.parseDouble(usage.get("output_tokens").toString());
+                                            } else if (usage.containsKey("outputTokens")) {
+                                                outputTokens = Double.parseDouble(usage.get("outputTokens").toString());
+                                            }
+                                            
+                                            double totalTokens = inputTokens + outputTokens;
+                                            attributes.put("gen_ai.usage.total_tokens", String.valueOf((int) totalTokens));
+                                            log.info("[AGENT_TRACE] Calculated total_tokens (Bedrock): {}", totalTokens);
+                                        } else {
+                                            log.info("[AGENT_TRACE] Cannot calculate total_tokens - missing input_tokens/inputTokens or output_tokens/outputTokens");
+                                        }
+                                    } else {
+                                        // OpenAI format: prompt_tokens, completion_tokens, total_tokens
+                                        if (usage.containsKey("prompt_tokens")) {
+                                            Object promptTokens = usage.get("prompt_tokens");
+                                            attributes.put("gen_ai.usage.input_tokens", promptTokens.toString());
+                                            log.info("[AGENT_TRACE] Extracted prompt_tokens (OpenAI): {}", promptTokens);
+                                        } else {
+                                            log.info("[AGENT_TRACE] prompt_tokens not found in OpenAI usage object");
+                                        }
+                                        
+                                        if (usage.containsKey("completion_tokens")) {
+                                            Object completionTokens = usage.get("completion_tokens");
+                                            attributes.put("gen_ai.usage.output_tokens", completionTokens.toString());
+                                            log.info("[AGENT_TRACE] Extracted completion_tokens (OpenAI): {}", completionTokens);
+                                        } else {
+                                            log.info("[AGENT_TRACE] completion_tokens not found in OpenAI usage object");
+                                        }
+                                        
+                                        if (usage.containsKey("total_tokens")) {
+                                            Object totalTokens = usage.get("total_tokens");
+                                            attributes.put("gen_ai.usage.total_tokens", totalTokens.toString());
+                                            log.info("[AGENT_TRACE] Extracted total_tokens (OpenAI): {}", totalTokens);
+                                        } else {
+                                            log.info("[AGENT_TRACE] total_tokens not found in OpenAI usage object");
+                                        }
+                                    }
+                                    
+                                    // Calculate and add cost information
+                                    double cost = calculateLLMCost(provider, modelId, usage);
+                                    attributes.put("gen_ai.cost.usd", String.format("%.6f", cost));
+                                    log.info("[AGENT_TRACE] Calculated cost: ${} for provider: {} and model: {}", cost, provider, modelId);
+                                    
+                                    // Log the extracted information for debugging
+                                    log.info("[AGENT_TRACE] Final LLM call attributes - input_tokens: {}, output_tokens: {}, total_tokens: {}, cost: ${}", 
+                                             attributes.get("gen_ai.usage.input_tokens"), 
+                                             attributes.get("gen_ai.usage.output_tokens"), 
+                                             attributes.get("gen_ai.usage.total_tokens"), 
+                                             attributes.get("gen_ai.cost.usd"));
+                                }
+                            } else {
+                                // Log when usage information is not found
+                                log.info("[AGENT_TRACE] No usage information found in dataAsMap. Available keys: {}", 
+                                         dataAsMap.keySet());
+                                
+                                // Check if there are any nested objects that might contain usage
+                                for (Map.Entry<String, ?> entry : dataAsMap.entrySet()) {
+                                    if (entry.getValue() instanceof Map) {
+                                        log.info("[AGENT_TRACE] Found nested map in key '{}': {}", entry.getKey(), entry.getValue());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            log.info("[AGENT_TRACE] ModelTensorOutput is null or empty");
+        }
+        
+        return attributes;
+    }
+
+    /**
+     * Calculate LLM cost based on provider, model, and token usage.
+     */
+    private static double calculateLLMCost(String provider, String modelId, Map<String, Object> usage) {
+        if (usage == null) {
+            return 0.0;
+        }
+        
+        // If provider is unknown, try to detect it from usage structure
+        if ("unknown".equals(provider)) {
+            provider = detectProviderFromUsage(usage);
+        }
+        
+        // Handle different token field names for different providers
+        double promptTokens = 0.0;
+        double completionTokens = 0.0;
+        
+        if ("bedrock".equalsIgnoreCase(provider) || "aws".equalsIgnoreCase(provider)) {
+            // Bedrock format: input_tokens, output_tokens (or inputTokens, outputTokens)
+            if (usage.containsKey("input_tokens")) {
+                promptTokens = getDoubleValue(usage.get("input_tokens"));
+            } else if (usage.containsKey("inputTokens")) {
+                promptTokens = getDoubleValue(usage.get("inputTokens"));
+            }
+            if (usage.containsKey("output_tokens")) {
+                completionTokens = getDoubleValue(usage.get("output_tokens"));
+            } else if (usage.containsKey("outputTokens")) {
+                completionTokens = getDoubleValue(usage.get("outputTokens"));
+            }
+        } else {
+            // OpenAI format: prompt_tokens, completion_tokens
+            if (usage.containsKey("prompt_tokens")) {
+                promptTokens = getDoubleValue(usage.get("prompt_tokens"));
+            }
+            if (usage.containsKey("completion_tokens")) {
+                completionTokens = getDoubleValue(usage.get("completion_tokens"));
+            }
+        }
+        
+        if (promptTokens == 0.0 && completionTokens == 0.0) {
+            return 0.0;
+        }
+        
+        // Cost per 1K tokens (approximate rates as of 2024)
+        double promptCostPer1K = 0.0;
+        double completionCostPer1K = 0.0;
+        
+        if (provider != null) {
+            switch (provider.toLowerCase()) {
+                case "openai":
+                    if (modelId != null && modelId.toLowerCase().contains("gpt-4")) {
+                        promptCostPer1K = 0.03; // GPT-4 input
+                        completionCostPer1K = 0.06; // GPT-4 output
+                    } else if (modelId != null && modelId.toLowerCase().contains("gpt-3.5")) {
+                        promptCostPer1K = 0.0015; // GPT-3.5-turbo input
+                        completionCostPer1K = 0.002; // GPT-3.5-turbo output
+                    } else {
+                        promptCostPer1K = 0.002; // Default OpenAI
+                        completionCostPer1K = 0.002;
+                    }
+                    break;
+                case "anthropic":
+                    if (modelId != null && modelId.toLowerCase().contains("claude-3")) {
+                        promptCostPer1K = 0.015; // Claude 3 Sonnet input
+                        completionCostPer1K = 0.075; // Claude 3 Sonnet output
+                    } else {
+                        promptCostPer1K = 0.008; // Claude 2 input
+                        completionCostPer1K = 0.024; // Claude 2 output
+                    }
+                    break;
+                case "aws":
+                case "bedrock":
+                    if (modelId != null && modelId.toLowerCase().contains("claude")) {
+                        promptCostPer1K = 0.008; // Claude on Bedrock input
+                        completionCostPer1K = 0.024; // Claude on Bedrock output
+                    } else {
+                        promptCostPer1K = 0.001; // Default AWS
+                        completionCostPer1K = 0.002;
+                    }
+                    break;
+                case "google":
+                    promptCostPer1K = 0.001; // Gemini Pro input
+                    completionCostPer1K = 0.002; // Gemini Pro output
+                    break;
+                default:
+                    // Unknown provider, use conservative estimate
+                    promptCostPer1K = 0.002;
+                    completionCostPer1K = 0.002;
+                    break;
+            }
+        }
+        
+        // Calculate total cost
+        double promptCost = (promptTokens / 1000.0) * promptCostPer1K;
+        double completionCost = (completionTokens / 1000.0) * completionCostPer1K;
+        
+        return promptCost + completionCost;
+    }
+
+    /**
+     * Safely convert Object to double value.
+     */
+    private static double getDoubleValue(Object value) {
+        if (value == null) {
+            return 0.0;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).doubleValue();
+        }
+        try {
+            return Double.parseDouble(value.toString());
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
+    }
+
+    /**
+     * Extract model provider from model ID.
+     */
+    private static String extractModelProvider(String modelId) {
+        if (modelId == null || modelId.isEmpty()) {
+            return "unknown";
+        }
+        
+        String lowerModelId = modelId.toLowerCase();
+        if (lowerModelId.contains("gpt") || lowerModelId.contains("openai")) {
+            return "openai";
+        } else if (lowerModelId.contains("claude") || lowerModelId.contains("anthropic")) {
+            return "anthropic";
+        } else if (lowerModelId.contains("bedrock") || lowerModelId.contains("aws")) {
+            return "bedrock";
+        } else if (lowerModelId.contains("gemini") || lowerModelId.contains("google")) {
+            return "google";
+        } else if (lowerModelId.contains("llama") || lowerModelId.contains("meta")) {
+            return "meta";
+        } else {
+            // If model ID doesn't contain clear provider indicators, 
+            // we'll need to detect it from the usage object structure later
+            return "unknown";
+        }
+    }
+    
+    /**
+     * Detect provider from usage object structure when model ID is unclear.
+     */
+    private static String detectProviderFromUsage(Map<String, Object> usage) {
+        if (usage == null) {
+            return "unknown";
+        }
+        
+        // Check for Bedrock/Claude specific fields
+        if (usage.containsKey("inputTokens") || usage.containsKey("outputTokens") || 
+            usage.containsKey("cacheReadInputTokens") || usage.containsKey("cacheWriteInputTokens")) {
+            return "bedrock";
+        }
+        
+        // Check for OpenAI specific fields
+        if (usage.containsKey("prompt_tokens") || usage.containsKey("completion_tokens")) {
+            return "openai";
+        }
+        
+        return "unknown";
+    }
 }

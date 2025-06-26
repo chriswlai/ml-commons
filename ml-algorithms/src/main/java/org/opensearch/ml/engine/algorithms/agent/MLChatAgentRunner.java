@@ -86,14 +86,15 @@ import org.opensearch.ml.repackage.com.google.common.collect.ImmutableMap;
 import org.opensearch.ml.repackage.com.google.common.collect.Lists;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.client.Client;
+import org.opensearch.telemetry.tracing.Span;
+import org.opensearch.telemetry.tracing.Tracer;
+import org.opensearch.ml.engine.algorithms.agent.tracing.MLAgentTracer;
 
 import lombok.Data;
-import lombok.NoArgsConstructor;
 import lombok.extern.log4j.Log4j2;
 
 @Log4j2
 @Data
-@NoArgsConstructor
 public class MLChatAgentRunner implements MLAgentRunner {
 
     public static final String SESSION_ID = "session_id";
@@ -134,6 +135,7 @@ public class MLChatAgentRunner implements MLAgentRunner {
     private Map<String, Memory.Factory> memoryFactoryMap;
     private SdkClient sdkClient;
     private Encryptor encryptor;
+    private final Tracer tracer;
 
     public MLChatAgentRunner(
         Client client,
@@ -143,8 +145,14 @@ public class MLChatAgentRunner implements MLAgentRunner {
         Map<String, Tool.Factory> toolFactories,
         Map<String, Memory.Factory> memoryFactoryMap,
         SdkClient sdkClient,
-        Encryptor encryptor
+        Encryptor encryptor,
+        Tracer tracer
     ) {
+        log
+            .info(
+                "Initializing MLChatAgentRunner with tracer: {}",
+                tracer != null ? tracer.getClass().getSimpleName() : "null"
+            );
         this.client = client;
         this.settings = settings;
         this.clusterService = clusterService;
@@ -153,6 +161,12 @@ public class MLChatAgentRunner implements MLAgentRunner {
         this.memoryFactoryMap = memoryFactoryMap;
         this.sdkClient = sdkClient;
         this.encryptor = encryptor;
+        this.tracer = tracer;
+        log
+            .info(
+                "MLChatAgentRunner initialized with tracer type: {}",
+                this.tracer != null ? this.tracer.getClass().getSimpleName() : "null"
+            );
     }
 
     @Override
