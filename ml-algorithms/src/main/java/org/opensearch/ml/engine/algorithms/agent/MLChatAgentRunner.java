@@ -87,6 +87,7 @@ import org.opensearch.ml.repackage.com.google.common.collect.Lists;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.transport.client.Client;
 import org.opensearch.telemetry.tracing.Span;
+import org.opensearch.telemetry.tracing.SpanContext;
 import org.opensearch.telemetry.tracing.Tracer;
 import org.opensearch.ml.engine.algorithms.agent.tracing.MLAgentTracer;
 
@@ -136,6 +137,7 @@ public class MLChatAgentRunner implements MLAgentRunner {
     private SdkClient sdkClient;
     private Encryptor encryptor;
     private final Tracer tracer;
+    private final MLAgentTracer agentTracer;
 
     public MLChatAgentRunner(
         Client client,
@@ -162,6 +164,9 @@ public class MLChatAgentRunner implements MLAgentRunner {
         this.sdkClient = sdkClient;
         this.encryptor = encryptor;
         this.tracer = tracer;
+        this.agentTracer = org.opensearch.ml.common.settings.MLCommonsSettings.ML_COMMONS_AGENT_TRACING_FEATURE_ENABLED.get(settings)
+            ? MLAgentTracer.getInstance()
+            : null;
         log
             .info(
                 "MLChatAgentRunner initialized with tracer type: {}",
@@ -171,202 +176,259 @@ public class MLChatAgentRunner implements MLAgentRunner {
 
     @Override
     public void run(MLAgent mlAgent, Map<String, String> inputParams, ActionListener<Object> listener) {
-        Map<String, String> params = new HashMap<>();
-        if (mlAgent.getParameters() != null) {
-            params.putAll(mlAgent.getParameters());
-            for (String key : mlAgent.getParameters().keySet()) {
-                if (key.startsWith("_")) {
-                    params.put(key, mlAgent.getParameters().get(key));
-                }
-            }
+        // Check if parent span context is provided in the request parameters
+        // Look for the new span context format
+        boolean hasParentSpanContext = inputParams.containsKey("traceparent");
+        log.info("[AGENT_TRACE] MLChatAgentRunner - hasParentSpanContext: {}", hasParentSpanContext);
+        log.info("[AGENT_TRACE] MLChatAgentRunner - inputParams keys: {}", inputParams.keySet());
+        
+        // Create the span once and make it effectively final
+        final Span agentTaskSpan;
+        if (hasParentSpanContext && agentTracer != null) {
+            // Use the parent span context - this means we're being called from another agent
+            // Extract the parent SpanContext using TracingContextPropagator
+            log.info("[AGENT_TRACE] Using parent span context from inputParams");
+            Map<String, String> agentAttributes = AgentUtils.createAgentTaskAttributes(mlAgent.getName(), inputParams.get(MLAgentExecutor.QUESTION));
+            Span parentSpan = agentTracer.extractSpanContext(inputParams);
+            agentTaskSpan = agentTracer.startSpan("agent.conv_task", agentAttributes, parentSpan);
+            log.info("[AGENT_TRACE] Created child agent span: agent.PER_task with parent: {}", 
+                     parentSpan != null ? parentSpan.getSpanName() : "none");
+        } else {
+            // Create a single span for the entire chat agent execution (standalone mode)
+            Map<String, String> agentAttributes = AgentUtils.createAgentTaskAttributes(mlAgent.getName(), inputParams.get(MLAgentExecutor.QUESTION));
+            agentTaskSpan = agentTracer != null ? agentTracer.startSpan("agent.task", agentAttributes, null) : null;
+            log.info("[AGENT_TRACE] Created standalone agent span: agent.task");
         }
-
-        params.putAll(inputParams);
-
-        String llmInterface = params.get(LLM_INTERFACE);
-        // todo: introduce function calling
-        // handle parameters based on llmInterface
-        if ("openai/v1/chat/completions".equalsIgnoreCase(llmInterface)) {
-            if (!params.containsKey(NO_ESCAPE_PARAMS)) {
-                params.put(NO_ESCAPE_PARAMS, DEFAULT_NO_ESCAPE_PARAMS);
-            }
-            params.put(LLM_RESPONSE_FILTER, "$.choices[0].message.content");
-
-            params
-                .put(
-                    TOOL_TEMPLATE,
-                    "{\"type\": \"function\", \"function\": { \"name\": \"${tool.name}\", \"description\": \"${tool.description}\", \"parameters\": ${tool.attributes.input_schema}, \"strict\": ${tool.attributes.strict:-false} } }"
-                );
-            params.put(TOOL_CALLS_PATH, "$.choices[0].message.tool_calls");
-            params.put(TOOL_CALLS_TOOL_NAME, "function.name");
-            params.put(TOOL_CALLS_TOOL_INPUT, "function.arguments");
-            params.put(TOOL_CALL_ID_PATH, "id");
-            params.put("tool_configs", ", \"tools\": [${parameters._tools:-}], \"parallel_tool_calls\": false");
-
-            params.put("tool_choice", "auto");
-            params.put("parallel_tool_calls", "false");
-
-            params.put("interaction_template.assistant_tool_calls_path", "$.choices[0].message");
-            params
-                .put(
-                    "interaction_template.tool_response",
-                    "{ \"role\": \"tool\", \"tool_call_id\": \"${_interactions.tool_call_id}\", \"content\": \"${_interactions.tool_response}\" }"
-                );
-
-            params.put("chat_history_template.user_question", "{\"role\": \"user\",\"content\": \"${_chat_history.message.question}\"}");
-            params.put("chat_history_template.ai_response", "{\"role\": \"assistant\",\"content\": \"${_chat_history.message.response}\"}");
-
-            params.put(LLM_FINISH_REASON_PATH, "$.choices[0].finish_reason");
-            params.put(LLM_FINISH_REASON_TOOL_USE, "tool_calls");
-        } else if ("bedrock/converse/claude".equalsIgnoreCase(llmInterface)) {
-            if (!params.containsKey(NO_ESCAPE_PARAMS)) {
-                params.put(NO_ESCAPE_PARAMS, DEFAULT_NO_ESCAPE_PARAMS);
-            }
-            params.put(LLM_RESPONSE_FILTER, "$.output.message.content[0].text");
-
-            params
-                .put(
-                    TOOL_TEMPLATE,
-                    "{\"toolSpec\":{\"name\":\"${tool.name}\",\"description\":\"${tool.description}\",\"inputSchema\": {\"json\": ${tool.attributes.input_schema} } }}"
-                );
-            params.put(TOOL_CALLS_PATH, "$.output.message.content[*].toolUse");
-            params.put(TOOL_CALLS_TOOL_NAME, "name");
-            params.put(TOOL_CALLS_TOOL_INPUT, "input");
-            params.put(TOOL_CALL_ID_PATH, "toolUseId");
-            params.put("tool_configs", ", \"toolConfig\": {\"tools\": [${parameters._tools:-}]}");
-
-            params.put("interaction_template.assistant_tool_calls_path", "$.output.message");
-            params
-                .put(
-                    "interaction_template.tool_response",
-                    "{\"role\":\"user\",\"content\":[{\"toolResult\":{\"toolUseId\":\"${_interactions.tool_call_id}\",\"content\":[{\"text\":\"${_interactions.tool_response}\"}]}}]}"
-                );
-
-            params
-                .put(
-                    "chat_history_template.user_question",
-                    "{\"role\":\"user\",\"content\":[{\"text\":\"${_chat_history.message.question}\"}]}"
-                );
-            params
-                .put(
-                    "chat_history_template.ai_response",
-                    "{\"role\":\"assistant\",\"content\":[{\"text\":\"${_chat_history.message.response}\"}]}"
-                );
-
-            params.put(LLM_FINISH_REASON_PATH, "$.stopReason");
-            params.put(LLM_FINISH_REASON_TOOL_USE, "tool_use");
-        } else if ("bedrock/converse/deepseek_r1".equalsIgnoreCase(llmInterface)) {
-            if (!params.containsKey(NO_ESCAPE_PARAMS)) {
-                params.put(NO_ESCAPE_PARAMS, "_chat_history,_interactions");
-            }
-            params.put(LLM_RESPONSE_FILTER, "$.output.message.content[0].text");
-            params.put("llm_final_response_post_filter", "$.message.content[0].text");
-
-            params
-                .put(
-                    TOOL_TEMPLATE,
-                    "{\"toolSpec\":{\"name\":\"${tool.name}\",\"description\":\"${tool.description}\",\"inputSchema\": {\"json\": ${tool.attributes.input_schema} } }}"
-                );
-            params.put(TOOL_CALLS_PATH, "_llm_response.tool_calls");
-            params.put(TOOL_CALLS_TOOL_NAME, "tool_name");
-            params.put(TOOL_CALLS_TOOL_INPUT, "input");
-            params.put(TOOL_CALL_ID_PATH, "id");
-
-            params.put("interaction_template.assistant_tool_calls_path", "$.output.message");
-            params.put("interaction_template.assistant_tool_calls_exclude_path", "[ \"$.output.message.content[?(@.reasoningContent)]\" ]");
-            params
-                .put(
-                    "interaction_template.tool_response",
-                    "{\"role\":\"user\",\"content\":[ {\"text\":\"{\\\"tool_call_id\\\":\\\"${_interactions.tool_call_id}\\\",\\\"tool_result\\\": \\\"${_interactions.tool_response}\\\"\"} ]}"
-                );
-
-            params
-                .put(
-                    "chat_history_template.user_question",
-                    "{\"role\":\"user\",\"content\":[{\"text\":\"${_chat_history.message.question}\"}]}"
-                );
-            params
-                .put(
-                    "chat_history_template.ai_response",
-                    "{\"role\":\"assistant\",\"content\":[{\"text\":\"${_chat_history.message.response}\"}]}"
-                );
-
-            params.put(LLM_FINISH_REASON_PATH, "_llm_response.stop_reason");
-            params.put(LLM_FINISH_REASON_TOOL_USE, "tool_use");
-        }
-        String memoryType = mlAgent.getMemory().getType();
-        String memoryId = params.get(MLAgentExecutor.MEMORY_ID);
-        String appType = mlAgent.getAppType();
-        String title = params.get(MLAgentExecutor.QUESTION);
-        String chatHistoryPrefix = params.getOrDefault(PROMPT_CHAT_HISTORY_PREFIX, CHAT_HISTORY_PREFIX);
-        String chatHistoryQuestionTemplate = params.get(CHAT_HISTORY_QUESTION_TEMPLATE);
-        String chatHistoryResponseTemplate = params.get(CHAT_HISTORY_RESPONSE_TEMPLATE);
-        int messageHistoryLimit = getMessageHistoryLimit(params);
-
-        ConversationIndexMemory.Factory conversationIndexMemoryFactory = (ConversationIndexMemory.Factory) memoryFactoryMap.get(memoryType);
-        conversationIndexMemoryFactory.create(title, memoryId, appType, ActionListener.<ConversationIndexMemory>wrap(memory -> {
-            // TODO: call runAgent directly if messageHistoryLimit == 0
-            memory.getMessages(ActionListener.<List<Interaction>>wrap(r -> {
-                List<Message> messageList = new ArrayList<>();
-                for (Interaction next : r) {
-                    String question = next.getInput();
-                    String response = next.getResponse();
-                    // As we store the conversation with empty response first and then update when have final answer,
-                    // filter out those in-flight requests when run in parallel
-                    if (Strings.isNullOrEmpty(response)) {
-                        continue;
-                    }
-                    messageList
-                        .add(
-                            ConversationIndexMessage
-                                .conversationIndexMessageBuilder()
-                                .sessionId(memory.getConversationId())
-                                .question(question)
-                                .response(response)
-                                .build()
-                        );
-                }
-                if (!messageList.isEmpty()) {
-                    if (chatHistoryQuestionTemplate == null) {
-                        StringBuilder chatHistoryBuilder = new StringBuilder();
-                        chatHistoryBuilder.append(chatHistoryPrefix);
-                        for (Message message : messageList) {
-                            chatHistoryBuilder.append(message.toString()).append("\n");
-                        }
-                        params.put(CHAT_HISTORY, chatHistoryBuilder.toString());
-
-                        // required for MLChatAgentRunnerTest.java, it requires chatHistory to be added to input params to validate
-                        inputParams.put(CHAT_HISTORY, chatHistoryBuilder.toString());
-                    } else {
-                        List<String> chatHistory = new ArrayList<>();
-                        for (Message message : messageList) {
-                            Map<String, String> messageParams = new HashMap<>();
-                            messageParams.put("question", processTextDoc(((ConversationIndexMessage) message).getQuestion()));
-
-                            StringSubstitutor substitutor = new StringSubstitutor(messageParams, CHAT_HISTORY_MESSAGE_PREFIX, "}");
-                            String chatQuestionMessage = substitutor.replace(chatHistoryQuestionTemplate);
-                            chatHistory.add(chatQuestionMessage);
-
-                            messageParams.clear();
-                            messageParams.put("response", processTextDoc(((ConversationIndexMessage) message).getResponse()));
-                            substitutor = new StringSubstitutor(messageParams, CHAT_HISTORY_MESSAGE_PREFIX, "}");
-                            String chatResponseMessage = substitutor.replace(chatHistoryResponseTemplate);
-                            chatHistory.add(chatResponseMessage);
-                        }
-                        params.put(CHAT_HISTORY, String.join(", ", chatHistory) + ", ");
-                        params.put(NEW_CHAT_HISTORY, String.join(", ", chatHistory) + ", ");
-
-                        // required for MLChatAgentRunnerTest.java, it requires chatHistory to be added to input params to validate
-                        inputParams.put(CHAT_HISTORY, String.join(", ", chatHistory) + ", ");
+        
+        try {
+            Map<String, String> params = new HashMap<>();
+            if (mlAgent.getParameters() != null) {
+                params.putAll(mlAgent.getParameters());
+                for (String key : mlAgent.getParameters().keySet()) {
+                    if (key.startsWith("_")) {
+                        params.put(key, mlAgent.getParameters().get(key));
                     }
                 }
+            }
 
-                runAgent(mlAgent, params, listener, memory, memory.getConversationId());
+            params.putAll(inputParams);
+
+            String llmInterface = params.get(LLM_INTERFACE);
+            // todo: introduce function calling
+            // handle parameters based on llmInterface
+            if ("openai/v1/chat/completions".equalsIgnoreCase(llmInterface)) {
+                if (!params.containsKey(NO_ESCAPE_PARAMS)) {
+                    params.put(NO_ESCAPE_PARAMS, DEFAULT_NO_ESCAPE_PARAMS);
+                }
+                params.put(LLM_RESPONSE_FILTER, "$.choices[0].message.content");
+
+                params
+                    .put(
+                        TOOL_TEMPLATE,
+                        "{\"type\": \"function\", \"function\": { \"name\": \"${tool.name}\", \"description\": \"${tool.description}\", \"parameters\": ${tool.attributes.input_schema}, \"strict\": ${tool.attributes.strict:-false} } }"
+                    );
+                params.put(TOOL_CALLS_PATH, "$.choices[0].message.tool_calls");
+                params.put(TOOL_CALLS_TOOL_NAME, "function.name");
+                params.put(TOOL_CALLS_TOOL_INPUT, "function.arguments");
+                params.put(TOOL_CALL_ID_PATH, "id");
+                params.put("tool_configs", ", \"tools\": [${parameters._tools:-}], \"parallel_tool_calls\": false");
+
+                params.put("tool_choice", "auto");
+                params.put("parallel_tool_calls", "false");
+
+                params.put("interaction_template.assistant_tool_calls_path", "$.choices[0].message");
+                params
+                    .put(
+                        "interaction_template.tool_response",
+                        "{ \"role\": \"tool\", \"tool_call_id\": \"${_interactions.tool_call_id}\", \"content\": \"${_interactions.tool_response}\" }"
+                    );
+
+                params.put("chat_history_template.user_question", "{\"role\": \"user\",\"content\": \"${_chat_history.message.question}\"}");
+                params.put("chat_history_template.ai_response", "{\"role\": \"assistant\",\"content\": \"${_chat_history.message.response}\"}");
+
+                params.put(LLM_FINISH_REASON_PATH, "$.choices[0].finish_reason");
+                params.put(LLM_FINISH_REASON_TOOL_USE, "tool_calls");
+            } else if ("bedrock/converse/claude".equalsIgnoreCase(llmInterface)) {
+                if (!params.containsKey(NO_ESCAPE_PARAMS)) {
+                    params.put(NO_ESCAPE_PARAMS, DEFAULT_NO_ESCAPE_PARAMS);
+                }
+                params.put(LLM_RESPONSE_FILTER, "$.output.message.content[0].text");
+
+                params
+                    .put(
+                        TOOL_TEMPLATE,
+                        "{\"toolSpec\":{\"name\":\"${tool.name}\",\"description\":\"${tool.description}\",\"inputSchema\": {\"json\": ${tool.attributes.input_schema} } }}"
+                    );
+                params.put(TOOL_CALLS_PATH, "$.output.message.content[*].toolUse");
+                params.put(TOOL_CALLS_TOOL_NAME, "name");
+                params.put(TOOL_CALLS_TOOL_INPUT, "input");
+                params.put(TOOL_CALL_ID_PATH, "toolUseId");
+                params.put("tool_configs", ", \"toolConfig\": {\"tools\": [${parameters._tools:-}]}");
+
+                params.put("interaction_template.assistant_tool_calls_path", "$.output.message");
+                params
+                    .put(
+                        "interaction_template.tool_response",
+                        "{\"role\":\"user\",\"content\":[{\"toolResult\":{\"toolUseId\":\"${_interactions.tool_call_id}\",\"content\":[{\"text\":\"${_interactions.tool_response}\"}]}}]}"
+                    );
+
+                params
+                    .put(
+                        "chat_history_template.user_question",
+                        "{\"role\":\"user\",\"content\":[{\"text\":\"${_chat_history.message.question}\"}]}"
+                    );
+                params
+                    .put(
+                        "chat_history_template.ai_response",
+                        "{\"role\":\"assistant\",\"content\":[{\"text\":\"${_chat_history.message.response}\"}]}"
+                    );
+
+                params.put(LLM_FINISH_REASON_PATH, "$.stopReason");
+                params.put(LLM_FINISH_REASON_TOOL_USE, "tool_use");
+            } else if ("bedrock/converse/deepseek_r1".equalsIgnoreCase(llmInterface)) {
+                if (!params.containsKey(NO_ESCAPE_PARAMS)) {
+                    params.put(NO_ESCAPE_PARAMS, "_chat_history,_interactions");
+                }
+                params.put(LLM_RESPONSE_FILTER, "$.output.message.content[0].text");
+                params.put("llm_final_response_post_filter", "$.message.content[0].text");
+
+                params
+                    .put(
+                        TOOL_TEMPLATE,
+                        "{\"toolSpec\":{\"name\":\"${tool.name}\",\"description\":\"${tool.description}\",\"inputSchema\": {\"json\": ${tool.attributes.input_schema} } }}"
+                    );
+                params.put(TOOL_CALLS_PATH, "_llm_response.tool_calls");
+                params.put(TOOL_CALLS_TOOL_NAME, "tool_name");
+                params.put(TOOL_CALLS_TOOL_INPUT, "input");
+                params.put(TOOL_CALL_ID_PATH, "id");
+
+                params.put("interaction_template.assistant_tool_calls_path", "$.output.message");
+                params.put("interaction_template.assistant_tool_calls_exclude_path", "[ \"$.output.message.content[?(@.reasoningContent)]\" ]");
+                params
+                    .put(
+                        "interaction_template.tool_response",
+                        "{\"role\":\"user\",\"content\":[ {\"text\":\"{\\\"tool_call_id\\\":\\\"${_interactions.tool_call_id}\\\",\\\"tool_result\\\": \\\"${_interactions.tool_response}\\\"\"} ]}"
+                    );
+
+                params
+                    .put(
+                        "chat_history_template.user_question",
+                        "{\"role\":\"user\",\"content\":[{\"text\":\"${_chat_history.message.question}\"}]}"
+                    );
+                params
+                    .put(
+                        "chat_history_template.ai_response",
+                        "{\"role\":\"assistant\",\"content\":[{\"text\":\"${_chat_history.message.response}\"}]}"
+                    );
+
+                params.put(LLM_FINISH_REASON_PATH, "_llm_response.stop_reason");
+                params.put(LLM_FINISH_REASON_TOOL_USE, "tool_use");
+            }
+            String memoryType = mlAgent.getMemory().getType();
+            String memoryId = params.get(MLAgentExecutor.MEMORY_ID);
+            String appType = mlAgent.getAppType();
+            String title = params.get(MLAgentExecutor.QUESTION);
+            String chatHistoryPrefix = params.getOrDefault(PROMPT_CHAT_HISTORY_PREFIX, CHAT_HISTORY_PREFIX);
+            String chatHistoryQuestionTemplate = params.get(CHAT_HISTORY_QUESTION_TEMPLATE);
+            String chatHistoryResponseTemplate = params.get(CHAT_HISTORY_RESPONSE_TEMPLATE);
+            int messageHistoryLimit = getMessageHistoryLimit(params);
+
+            ConversationIndexMemory.Factory conversationIndexMemoryFactory = (ConversationIndexMemory.Factory) memoryFactoryMap.get(memoryType);
+            conversationIndexMemoryFactory.create(title, memoryId, appType, ActionListener.<ConversationIndexMemory>wrap(memory -> {
+                // TODO: call runAgent directly if messageHistoryLimit == 0
+                memory.getMessages(ActionListener.<List<Interaction>>wrap(r -> {
+                    List<Message> messageList = new ArrayList<>();
+                    for (Interaction next : r) {
+                        String question = next.getInput();
+                        String response = next.getResponse();
+                        // As we store the conversation with empty response first and then update when have final answer,
+                        // filter out those in-flight requests when run in parallel
+                        if (Strings.isNullOrEmpty(response)) {
+                            continue;
+                        }
+                        messageList
+                            .add(
+                                ConversationIndexMessage
+                                    .conversationIndexMessageBuilder()
+                                    .sessionId(memory.getConversationId())
+                                    .question(question)
+                                    .response(response)
+                                    .build()
+                            );
+                    }
+                    if (!messageList.isEmpty()) {
+                        if (chatHistoryQuestionTemplate == null) {
+                            StringBuilder chatHistoryBuilder = new StringBuilder();
+                            chatHistoryBuilder.append(chatHistoryPrefix);
+                            for (Message message : messageList) {
+                                chatHistoryBuilder.append(message.toString()).append("\n");
+                            }
+                            params.put(CHAT_HISTORY, chatHistoryBuilder.toString());
+
+                            // required for MLChatAgentRunnerTest.java, it requires chatHistory to be added to input params to validate
+                            inputParams.put(CHAT_HISTORY, chatHistoryBuilder.toString());
+                        } else {
+                            List<String> chatHistory = new ArrayList<>();
+                            for (Message message : messageList) {
+                                Map<String, String> messageParams = new HashMap<>();
+                                messageParams.put("question", processTextDoc(((ConversationIndexMessage) message).getQuestion()));
+
+                                StringSubstitutor substitutor = new StringSubstitutor(messageParams, CHAT_HISTORY_MESSAGE_PREFIX, "}");
+                                String chatQuestionMessage = substitutor.replace(chatHistoryQuestionTemplate);
+                                chatHistory.add(chatQuestionMessage);
+
+                                messageParams.clear();
+                                messageParams.put("response", processTextDoc(((ConversationIndexMessage) message).getResponse()));
+                                substitutor = new StringSubstitutor(messageParams, CHAT_HISTORY_MESSAGE_PREFIX, "}");
+                                String chatResponseMessage = substitutor.replace(chatHistoryResponseTemplate);
+                                chatHistory.add(chatResponseMessage);
+                            }
+                            params.put(CHAT_HISTORY, String.join(", ", chatHistory) + ", ");
+                            params.put(NEW_CHAT_HISTORY, String.join(", ", chatHistory) + ", ");
+
+                            // required for MLChatAgentRunnerTest.java, it requires chatHistory to be added to input params to validate
+                            inputParams.put(CHAT_HISTORY, String.join(", ", chatHistory) + ", ");
+                        }
+                    }
+
+                    runAgent(mlAgent, params, ActionListener.wrap(result -> {
+                        // End agent task span after all work completes (only if we created our own span)
+                        if (agentTaskSpan != null) {
+                            agentTracer.endSpan(agentTaskSpan);
+                        }
+                        listener.onResponse(result);
+                    }, e -> {
+                        // End agent task span even on error (only if we created our own span)
+                        if (agentTaskSpan != null) {
+                            agentTaskSpan.setError(e);
+                            agentTracer.endSpan(agentTaskSpan);
+                        }
+                        listener.onFailure(e);
+                    }), memory, memory.getConversationId());
+                }, e -> {
+                    log.error("Failed to get chat history", e);
+                    if (agentTaskSpan != null) {
+                        agentTaskSpan.setError(e);
+                        agentTracer.endSpan(agentTaskSpan);
+                    }
+                    listener.onFailure(e);
+                }), messageHistoryLimit);
             }, e -> {
-                log.error("Failed to get chat history", e);
+                log.error("Failed to create memory", e);
+                if (agentTaskSpan != null) {
+                    agentTaskSpan.setError(e);
+                    agentTracer.endSpan(agentTaskSpan);
+                }
                 listener.onFailure(e);
-            }), messageHistoryLimit);
-        }, listener::onFailure));
+            }));
+        } catch (Exception e) {
+            log.error("Error in MLChatAgentRunner", e);
+            if (agentTaskSpan != null) {
+                agentTaskSpan.setError(e);
+                agentTracer.endSpan(agentTaskSpan);
+            }
+            listener.onFailure(e);
+        }
     }
 
     private void runAgent(MLAgent mlAgent, Map<String, String> params, ActionListener<Object> listener, Memory memory, String sessionId) {
@@ -938,5 +1000,55 @@ public class MLChatAgentRunner implements MLAgentRunner {
         } else {
             memory.save(msgTemp, parentInteractionId, traceNumber.addAndGet(1), "LLM", listener);
         }
+    }
+
+    private Span extractSpanContextWithPropagator(Map<String, String> inputParams) {
+        // Check if we have proper span context
+        if (inputParams.containsKey("_has_span_context")) {
+            try {
+                String traceId = inputParams.get("_span_context_trace_id");
+                String spanId = inputParams.get("_span_context_span_id");
+                String spanName = inputParams.get("_span_context_span_name");
+                
+                if (traceId != null && spanId != null && spanName != null) {
+                    // Create a proper parent span context using the MLAgentTracer
+                    // This will create a span that's properly linked to the parent
+                    Map<String, String> parentAttributes = new HashMap<>();
+                    parentAttributes.put("gen_ai.agent.parent.trace_id", traceId);
+                    parentAttributes.put("gen_ai.agent.parent.span_id", spanId);
+                    parentAttributes.put("gen_ai.agent.parent.span_name", spanName);
+                    
+                    // Create a parent span that represents the context we received
+                    Span parentSpan = agentTracer.startSpan(spanName, parentAttributes, null);
+                    
+                    log.debug("[AGENT_TRACE] Successfully extracted parent span context: traceId={}, spanId={}, spanName={}", 
+                             traceId, spanId, spanName);
+                    
+                    return parentSpan;
+                }
+                
+            } catch (Exception e) {
+                log.warn("Failed to extract span context, falling back to simple extraction", e);
+            }
+        }
+        
+        // Fallback: try to extract from simple serialization format
+        String parentSpanName = inputParams.get("_parent_span_context");
+        String traceId = inputParams.get("_span_trace_id");
+        String spanId = inputParams.get("_span_span_id");
+        
+        if (parentSpanName != null && traceId != null && spanId != null) {
+            log.debug("[AGENT_TRACE] Using fallback span context extraction: {} | TraceId: {} | SpanId: {}", 
+                     parentSpanName, traceId, spanId);
+            // Create a parent span with the fallback information
+            Map<String, String> parentAttributes = new HashMap<>();
+            parentAttributes.put("gen_ai.agent.parent.trace_id", traceId);
+            parentAttributes.put("gen_ai.agent.parent.span_id", spanId);
+            parentAttributes.put("gen_ai.agent.parent.span_name", parentSpanName);
+            
+            return agentTracer.startSpan(parentSpanName, parentAttributes, null);
+        }
+        
+        return null;
     }
 }

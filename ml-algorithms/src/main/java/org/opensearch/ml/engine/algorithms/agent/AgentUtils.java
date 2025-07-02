@@ -937,20 +937,13 @@ public class AgentUtils {
      */
     public static Map<String, String> createAgentTaskAttributes(String agentName, String userTask) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.name", "ml-agent");
         attributes.put("service.type", "agent");
-        // Agent span conventions
-        attributes.put("gen_ai.operation.name", "create_agent"); // or invoke_agent, override as needed
         if (agentName != null) {
             attributes.put("gen_ai.agent.name", agentName);
         }
-        // Add agent.id and agent.description if available (not present in current signature)
-        // Add more attributes if available (conversation id, data source id, output type, etc.)
-        attributes.put("gen_ai.agent.name", agentName != null ? agentName : "unknown_agent");
         attributes.put("gen_ai.agent.task", userTask != null ? userTask : "");
-        attributes.put("gen_ai.agent.task.length", userTask != null ? String.valueOf(userTask.length()) : "0");
-        attributes.put("gen_ai.agent.task.timestamp", String.valueOf(System.currentTimeMillis()));
-        attributes.put("gen_ai.agent.framework", "plan-execute-reflect");
+        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
+        attributes.put("gen_ai.operation.name", "create_agent");
         return attributes;
     }
 
@@ -959,14 +952,14 @@ public class AgentUtils {
      */
     public static Map<String, String> createPlanAttributes(int stepNumber, String modelId) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.name", "ml-agent");
         attributes.put("service.type", "agent");
         attributes.put("gen_ai.agent.phase", "planner");
         attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
-        attributes.put("gen_ai.agent.step.type", "plan");
-        attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
-        attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
-        attributes.put("gen_ai.agent.plan.timestamp", String.valueOf(System.currentTimeMillis()));
+        // TODO: get actual model ex. claude or gpt4
+        // attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
+        // attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
+        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
+        attributes.put("gen_ai.operation.name", "create_agent");
         return attributes;
     }
 
@@ -975,28 +968,11 @@ public class AgentUtils {
      */
     public static Map<String, String> createExecuteStepAttributes(int stepNumber, String executorName) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.name", "ml-agent");
         attributes.put("service.type", "agent");
         attributes.put("gen_ai.agent.phase", "executor");
         attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
-        attributes.put("gen_ai.agent.step.type", "execute");
-        attributes.put("gen_ai.agent.executor.name", executorName != null ? executorName : "");
-        attributes.put("gen_ai.agent.executor.type", "react_agent");
-        attributes.put("gen_ai.agent.execute.timestamp", String.valueOf(System.currentTimeMillis()));
-        return attributes;
-    }
-
-    /**
-     * Record state transition by creating attributes only (no span creation here).
-     */
-    public static Map<String, String> recordStateTransition(String fromState, String toState) {
-        Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.name", "ml-agent");
-        attributes.put("service.type", "agent");
-        attributes.put("gen_ai.agent.state.transition.from", fromState != null ? fromState : "");
-        attributes.put("gen_ai.agent.state.transition.to", toState != null ? toState : "");
-        attributes.put("gen_ai.agent.state.transition.type", "agent_workflow");
-        attributes.put("gen_ai.agent.state.transition.timestamp", String.valueOf(System.currentTimeMillis()));
+        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
+        attributes.put("gen_ai.operation.name", "invoke_agent");
         return attributes;
     }
 
@@ -1005,18 +981,14 @@ public class AgentUtils {
      */
     public static Map<String, String> recordToolExecution(String toolName, Map<String, Object> parameters, Object result) {
         Map<String, String> attributes = new HashMap<>();
-        // Tool span conventions
         attributes.put("gen_ai.operation.name", "execute_tool");
-        attributes.put("gen_ai.tool.name", toolName != null ? toolName : "");
-        if (parameters != null && parameters.containsKey("tool_call_id")) {
-            attributes.put("gen_ai.tool.call.id", parameters.get("tool_call_id").toString());
-        }
-        if (parameters != null && parameters.containsKey("tool_description")) {
-            attributes.put("gen_ai.tool.description", parameters.get("tool_description").toString());
-        }
-        // Existing attributes
-        if (!parameters.isEmpty()) {
-            attributes.put("gen_ai.tool.parameters", parameters.toString());
+        if (parameters != null) {
+            if (parameters.containsKey("system_prompt")) {
+                attributes.put("gen_ai.system.message", parameters.get("system_prompt").toString());
+            }
+            if (parameters.containsKey("question")) {
+                attributes.put("gen_ai.user.message", parameters.get("question").toString());
+            }
         }
         if (result != null) {
             if (result instanceof ModelTensorOutput) {
@@ -1042,30 +1014,30 @@ public class AgentUtils {
                 }
                 String meaningfulResult = resultBuilder.toString().trim();
                 if (!meaningfulResult.isEmpty()) {
-                    attributes.put("gen_ai.tool.result", meaningfulResult);
+                    attributes.put("gen_ai.agent.result", meaningfulResult);
                 } else {
-                    attributes.put("gen_ai.tool.result", "ModelTensorOutput with " + 
+                    attributes.put("gen_ai.agent.result", "ModelTensorOutput with " + 
                         (modelOutput.getMlModelOutputs() != null ? modelOutput.getMlModelOutputs().size() : 0) + " outputs");
                 }
             } else {
                 String resultStr = result.toString();
-                if (resultStr.length() > 500) {
-                    resultStr = resultStr.substring(0, 500) + "...";
-                }
-                attributes.put("gen_ai.tool.result", resultStr);
+                // if (resultStr.length() > 500) {
+                //     resultStr = resultStr.substring(0, 500) + "...";
+                // }
+                attributes.put("gen_ai.agent.result", resultStr);
             }
         } else {
-            attributes.put("gen_ai.tool.result", "null");
+            attributes.put("gen_ai.agent.result", "null");
         }
         attributes.put("service.type", "agent");
         // Add more useful attributes
         if (parameters != null) {
             if (parameters.containsKey("step")) {
-                attributes.put("gen_ai.agent.step", parameters.get("step").toString());
+                attributes.put("gen_ai.agent.task", parameters.get("step").toString());
             }
-            if (parameters.containsKey("agent_id")) {
-                attributes.put("gen_ai.agent.executor.id", parameters.get("agent_id").toString());
-            }
+            // if (parameters.containsKey("agent_id")) {
+            //     attributes.put("gen_ai.agent.executor.id", parameters.get("agent_id").toString());
+            // }
         }
         return attributes;
     }
@@ -1075,20 +1047,16 @@ public class AgentUtils {
      */
     public static Map<String, String> recordLLMOperation(String modelId, String prompt, String completion, long latency) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.name", "ml-agent");
-        attributes.put("service.type", "agent"); // Not part of metrics conventions
-        attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
-        attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
+        attributes.put("service.type", "agent");
+        // TODO: get actual model ex. claude or gpt4
+        // attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
+        // attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
         // Add model span conventions
-        attributes.put("gen_ai.operation.name", "chat"); // Default to chat, override as needed
-        // Add more attributes if available (e.g., conversation id, output type, etc.)
-        // See below for full list
-        attributes.put("gen_ai.request.input", prompt != null ? prompt : "");
-        attributes.put("gen_ai.request.input.length", prompt != null ? String.valueOf(prompt.length()) : "0");
-        attributes.put("gen_ai.response.output", completion != null ? completion : "");
-        attributes.put("gen_ai.response.output.length", completion != null ? String.valueOf(completion.length()) : "0");
-        attributes.put("gen_ai.request.latency.ms", String.valueOf(latency));
-        attributes.put("gen_ai.operation.timestamp", String.valueOf(System.currentTimeMillis()));
+        attributes.put("gen_ai.operation.name", "chat");
+        attributes.put("gen_ai.agent.task", prompt != null ? prompt : "");
+        attributes.put("gen_ai.agent.result", completion != null ? completion : "");
+        attributes.put("gen_ai.agent.latency", String.valueOf(latency));
+        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
         return attributes;
     }
 
@@ -1099,18 +1067,13 @@ public class AgentUtils {
         Map<String, String> attributes = new HashMap<>();
         
         // Basic LLM call information
-        attributes.put("service.name", "ml-agent");
-        attributes.put("service.type", "agent"); // Not part of metrics conventions
-        attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
+        attributes.put("service.type", "agent");
         attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
-        attributes.put("gen_ai.operation.name", "chat"); // Default to chat, override as needed
-        // Add more attributes if available (e.g., conversation id, output type, etc.)
-        attributes.put("gen_ai.request.input", prompt != null ? prompt : "");
-        attributes.put("gen_ai.request.input.length", prompt != null ? String.valueOf(prompt.length()) : "0");
-        attributes.put("gen_ai.response.output", completion != null ? completion : "");
-        attributes.put("gen_ai.response.output.length", completion != null ? String.valueOf(completion.length()) : "0");
-        attributes.put("gen_ai.request.latency.ms", String.valueOf(latency));
-        attributes.put("gen_ai.operation.timestamp", String.valueOf(System.currentTimeMillis()));
+        attributes.put("gen_ai.operation.name", "chat");
+        attributes.put("gen_ai.agent.task", prompt != null ? prompt : "");
+        attributes.put("gen_ai.agent.result", completion != null ? completion : "");
+        attributes.put("gen_ai.agent.latency", String.valueOf(latency));
+        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
         
         // Extract token usage information from ModelTensorOutput
         if (modelTensorOutput != null && modelTensorOutput.getMlModelOutputs() != null && !modelTensorOutput.getMlModelOutputs().isEmpty()) {

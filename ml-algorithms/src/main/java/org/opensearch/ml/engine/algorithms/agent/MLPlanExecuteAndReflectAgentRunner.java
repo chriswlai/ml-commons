@@ -19,7 +19,6 @@ import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.getMlToolSpec
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.createAgentTaskAttributes;
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.createPlanAttributes;
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.createExecuteStepAttributes;
-import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.recordStateTransition;
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.recordToolExecution;
 import static org.opensearch.ml.engine.algorithms.agent.AgentUtils.recordLLMOperation;
 import static org.opensearch.ml.engine.algorithms.agent.MLChatAgentRunner.LLM_INTERFACE;
@@ -272,10 +271,6 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
             String memoryId = allParams.get(MEMORY_ID_FIELD);
             String memoryType = mlAgent.getMemory().getType();
 
-            if (agentTracer != null && agentTaskSpan != null) {
-                agentTaskSpan.addAttribute("gen_ai.agent.memory.id", memoryId != null ? memoryId : "");
-                agentTaskSpan.addAttribute("gen_ai.agent.memory.type", memoryType != null ? memoryType : "");
-            }
 
             setupPromptParameters(allParams);
             usePlannerPromptTemplate(allParams);
@@ -426,7 +421,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
         if (stepsExecuted == 0) {
             planStepSpanName = "agent.plan";
         } else {
-            planStepSpanName = String.format("agent.reflect_step_%d", stepsExecuted - 1);
+            planStepSpanName = String.format("agent.reflect_step_%d", stepsExecuted);
         }
         Span planStepSpan = agentTracer != null ? agentTracer.startSpan(planStepSpanName, planStepAttributes, agentTaskSpan) : null;
         
@@ -477,7 +472,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
             
             // Create LLM call span BEFORE making the actual LLM call
             Map<String, String> llmCallAttrs = AgentUtils.createLLMCallAttributes(llm.getModelId(), allParams.get(PROMPT_FIELD), "", 0, null);
-            Span llmCallSpan = agentTracer != null ? agentTracer.startSpan("llm.call", llmCallAttrs, planStepSpan) : null;
+            Span llmCallSpan = agentTracer != null ? agentTracer.startSpan("agent.llm_call", llmCallAttrs, planStepSpan) : null;
             
             // Record start time for LLM latency calculation
             long llmStartTime = System.currentTimeMillis();
@@ -542,6 +537,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                         reactParams.put(SYSTEM_PROMPT_FIELD, allParams.getOrDefault(EXECUTOR_SYSTEM_PROMPT_FIELD, DEFAULT_EXECUTOR_SYSTEM_PROMPT));
                         reactParams.put(LLM_RESPONSE_FILTER, allParams.get("original_llm_response_filter"));
                         reactParams.put(MAX_ITERATION, allParams.getOrDefault(EXECUTOR_MAX_ITERATIONS_FIELD, DEFAULT_REACT_MAX_ITERATIONS));
+                        
                         AgentMLInput agentInput = AgentMLInput
                             .AgentMLInputBuilder()
                             .agentId(reActAgentId)
@@ -550,19 +546,10 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                             .build();
                         MLExecuteTaskRequest executeRequest = new MLExecuteTaskRequest(FunctionName.AGENT, agentInput);
                         
-                        // Record state transition to ReAct execution
-                        Map<String, String> stateTransitionAttrs = AgentUtils.recordStateTransition("planner", "executor");
-                        Span stateTransitionSpan = agentTracer != null ? agentTracer.startSpan("state.transition", stateTransitionAttrs, llmCallSpan) : null;
-                        if (agentTracer != null && stateTransitionSpan != null) {
-                            agentTracer.endSpan(stateTransitionSpan);
-                        }
-                        
                         // End plan step span BEFORE starting execute step
                         if (agentTracer != null && planStepSpan != null) {
                             agentTracer.endSpan(planStepSpan);
                         }
-                        
-                        log.info("[AGENT_TRACE] State Transition: From: {} | To: {}", "planning", "react_execution");
                         
                         // Create execute step span as a child of agent.task (same level as plan/reflect steps)
                         Map<String, Object> reactParamsObj = new HashMap<>(reactParams);
@@ -570,12 +557,22 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                         reactParamsObj.put("agent_id", reActAgentId);
                         reactParamsObj.put("latency", 0); // Will be updated after execution
                         Map<String, String> toolExecAttrs = recordToolExecution("react_agent", reactParamsObj, null);
-                        String executeStepSpanName = String.format("agent.execute_step_%d", stepsExecuted);
-                        Span executeStepSpan = agentTracer != null ? agentTracer.startSpan(executeStepSpanName, toolExecAttrs, agentTaskSpan) : null;
+                        int currentStep = stepsExecuted + 1;
+                        String executeStepSpanName = String.format("agent.execute_step_%d", currentStep);
+                        Map<String, String> executeStepAttrs = AgentUtils.createExecuteStepAttributes(currentStep, llm.getModelId());
+                        Span executeStepSpan = agentTracer != null ? agentTracer.startSpan(executeStepSpanName, executeStepAttrs, agentTaskSpan) : null;
+
+                        // Inject parent SpanContext using TracingContextPropagator
+                        if (agentTracer != null && executeStepSpan != null) {
+                            Map<String, String> spanContextMap = new HashMap<>();
+                            agentTracer.injectSpanContext(executeStepSpan, spanContextMap);
+                            reactParams.putAll(spanContextMap);
+                            log.info("[AGENT_TRACE] PER Agent - Injected parent SpanContext: {}", spanContextMap);
+                        }
                         
                         // Create agent.conv span as child of execute step
                         Span toolSpan = agentTracer != null ? agentTracer.startSpan("agent.conv", toolExecAttrs, executeStepSpan) : null;
-                        
+
                         long reactStartTime = System.nanoTime();
                         client.execute(MLExecuteTaskAction.INSTANCE, executeRequest, ActionListener.wrap(executeResponse -> {
                             long reactLatencyNanos = System.nanoTime() - reactStartTime;
@@ -587,8 +584,8 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                 
                                 // Update the tool span with the actual latency and execution time
                                 if (agentTracer != null && toolSpan != null) {
-                                    toolSpan.addAttribute("gen_ai.tool.latency.ms", reactLatencyMs);
-                                    toolSpan.addAttribute("gen_ai.tool.call.timestamp", System.currentTimeMillis());
+                                    toolSpan.addAttribute("gen_ai.agent.latency", reactLatencyMs);
+                                    toolSpan.addAttribute("gen_ai.agent.timestamp", System.nanoTime());
                                 }
                                 
                                 // Record ReAct agent execution
@@ -617,11 +614,11 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                 if (results.containsKey(STEP_RESULT_FIELD)) {
                                     String meaningfulResult = results.get(STEP_RESULT_FIELD);
                                     if (agentTracer != null && toolSpan != null) {
-                                        toolSpan.addAttribute("gen_ai.tool.result", meaningfulResult);
+                                        toolSpan.addAttribute("gen_ai.agent.result", meaningfulResult);
                                     }
                                 } else {
                                     if (agentTracer != null && toolSpan != null) {
-                                        toolSpan.addAttribute("gen_ai.tool.result", "ReAct agent completed but no response found");
+                                        toolSpan.addAttribute("gen_ai.agent.result", "ReAct agent completed but no response found");
                                     }
                                 }
                                 
@@ -667,7 +664,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                     completedSteps,
                                     memory,
                                     conversationId,
-                                    stepsExecuted + 1,
+                                    stepsExecuted + 2,
                                     traceNumber,
                                     finalListener,
                                     agentTaskSpan,
@@ -922,5 +919,39 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                     .build()
             );
         return modelTensors;
+    }
+
+    private Map<String, String> serializeSpanContextWithPropagator(Span span) {
+        Map<String, String> serializedContext = new HashMap<>();
+        
+        try {
+            // Get the TracingContextPropagator through the Tracer interface
+            // Since we can't access it directly, we'll use a simpler approach
+            // that serializes the essential span information for proper context propagation
+            
+            if (span != null) {
+                // Serialize the span context in a format that can be used for proper parent-child relationships
+                serializedContext.put("_span_context_trace_id", span.getTraceId());
+                serializedContext.put("_span_context_span_id", span.getSpanId());
+                serializedContext.put("_span_context_span_name", span.getSpanName());
+                
+                // Add a marker to indicate this is a proper span context
+                serializedContext.put("_has_span_context", "true");
+                
+                log.debug("[AGENT_TRACE] Successfully serialized span context: traceId={}, spanId={}, spanName={}", 
+                         span.getTraceId(), span.getSpanId(), span.getSpanName());
+            }
+            
+        } catch (Exception e) {
+            log.warn("Failed to serialize span context, falling back to simple serialization", e);
+            // Fallback to simple serialization
+            if (span != null) {
+                serializedContext.put("_parent_span_context", span.getSpanName());
+                serializedContext.put("_span_trace_id", span.getTraceId());
+                serializedContext.put("_span_span_id", span.getSpanId());
+            }
+        }
+        
+        return serializedContext;
     }
 }

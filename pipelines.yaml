@@ -37,6 +37,7 @@ raw-trace-pipeline:
         username: admin
         password: MyPassword123!
         index_type: trace-analytics-raw
+        # template_file: /path/to/index-template.json
 
 service-map-pipeline:
   workers: 8
