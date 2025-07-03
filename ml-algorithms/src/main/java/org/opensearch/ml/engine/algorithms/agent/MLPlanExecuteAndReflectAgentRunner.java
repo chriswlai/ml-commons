@@ -585,7 +585,6 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                                 // Update the tool span with the actual latency and execution time
                                 if (agentTracer != null && toolSpan != null) {
                                     toolSpan.addAttribute("gen_ai.agent.latency", reactLatencyMs);
-                                    toolSpan.addAttribute("gen_ai.agent.timestamp", System.nanoTime());
                                 }
                                 
                                 // Record ReAct agent execution

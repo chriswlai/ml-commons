@@ -942,7 +942,6 @@ public class AgentUtils {
             attributes.put("gen_ai.agent.name", agentName);
         }
         attributes.put("gen_ai.agent.task", userTask != null ? userTask : "");
-        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
         attributes.put("gen_ai.operation.name", "create_agent");
         return attributes;
     }
@@ -958,7 +957,6 @@ public class AgentUtils {
         // TODO: get actual model ex. claude or gpt4
         // attributes.put("gen_ai.request.model", modelId != null ? modelId : "");
         // attributes.put("gen_ai.system", modelId != null ? extractModelProvider(modelId) : "");
-        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
         attributes.put("gen_ai.operation.name", "create_agent");
         return attributes;
     }
@@ -971,7 +969,6 @@ public class AgentUtils {
         attributes.put("service.type", "agent");
         attributes.put("gen_ai.agent.phase", "executor");
         attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
-        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
         attributes.put("gen_ai.operation.name", "invoke_agent");
         return attributes;
     }
@@ -985,9 +982,6 @@ public class AgentUtils {
         if (parameters != null) {
             if (parameters.containsKey("system_prompt")) {
                 attributes.put("gen_ai.system.message", parameters.get("system_prompt").toString());
-            }
-            if (parameters.containsKey("question")) {
-                attributes.put("gen_ai.user.message", parameters.get("question").toString());
             }
         }
         if (result != null) {
@@ -1056,7 +1050,6 @@ public class AgentUtils {
         attributes.put("gen_ai.agent.task", prompt != null ? prompt : "");
         attributes.put("gen_ai.agent.result", completion != null ? completion : "");
         attributes.put("gen_ai.agent.latency", String.valueOf(latency));
-        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
         return attributes;
     }
 
@@ -1073,7 +1066,6 @@ public class AgentUtils {
         attributes.put("gen_ai.agent.task", prompt != null ? prompt : "");
         attributes.put("gen_ai.agent.result", completion != null ? completion : "");
         attributes.put("gen_ai.agent.latency", String.valueOf(latency));
-        attributes.put("gen_ai.agent.timestamp", String.valueOf(System.nanoTime()));
         
         // Extract token usage information from ModelTensorOutput
         if (modelTensorOutput != null && modelTensorOutput.getMlModelOutputs() != null && !modelTensorOutput.getMlModelOutputs().isEmpty()) {
@@ -1197,11 +1189,6 @@ public class AgentUtils {
                                         }
                                     }
                                     
-                                    // Calculate and add cost information
-                                    double cost = calculateLLMCost(provider, modelId, usage);
-                                    attributes.put("gen_ai.cost.usd", String.format("%.6f", cost));
-                                    log.info("[AGENT_TRACE] Calculated cost: ${} for provider: {} and model: {}", cost, provider, modelId);
-                                    
                                     // Log the extracted information for debugging
                                     log.info("[AGENT_TRACE] Final LLM call attributes - input_tokens: {}, output_tokens: {}, total_tokens: {}, cost: ${}", 
                                              attributes.get("gen_ai.usage.input_tokens"), 
@@ -1230,122 +1217,6 @@ public class AgentUtils {
         }
         
         return attributes;
-    }
-
-    /**
-     * Calculate LLM cost based on provider, model, and token usage.
-     */
-    private static double calculateLLMCost(String provider, String modelId, Map<String, Object> usage) {
-        if (usage == null) {
-            return 0.0;
-        }
-        
-        // If provider is unknown, try to detect it from usage structure
-        if ("unknown".equals(provider)) {
-            provider = detectProviderFromUsage(usage);
-        }
-        
-        // Handle different token field names for different providers
-        double promptTokens = 0.0;
-        double completionTokens = 0.0;
-        
-        if ("bedrock".equalsIgnoreCase(provider) || "aws".equalsIgnoreCase(provider)) {
-            // Bedrock format: input_tokens, output_tokens (or inputTokens, outputTokens)
-            if (usage.containsKey("input_tokens")) {
-                promptTokens = getDoubleValue(usage.get("input_tokens"));
-            } else if (usage.containsKey("inputTokens")) {
-                promptTokens = getDoubleValue(usage.get("inputTokens"));
-            }
-            if (usage.containsKey("output_tokens")) {
-                completionTokens = getDoubleValue(usage.get("output_tokens"));
-            } else if (usage.containsKey("outputTokens")) {
-                completionTokens = getDoubleValue(usage.get("outputTokens"));
-            }
-        } else {
-            // OpenAI format: prompt_tokens, completion_tokens
-            if (usage.containsKey("prompt_tokens")) {
-                promptTokens = getDoubleValue(usage.get("prompt_tokens"));
-            }
-            if (usage.containsKey("completion_tokens")) {
-                completionTokens = getDoubleValue(usage.get("completion_tokens"));
-            }
-        }
-        
-        if (promptTokens == 0.0 && completionTokens == 0.0) {
-            return 0.0;
-        }
-        
-        // Cost per 1K tokens (approximate rates as of 2024)
-        double promptCostPer1K = 0.0;
-        double completionCostPer1K = 0.0;
-        
-        if (provider != null) {
-            switch (provider.toLowerCase()) {
-                case "openai":
-                    if (modelId != null && modelId.toLowerCase().contains("gpt-4")) {
-                        promptCostPer1K = 0.03; // GPT-4 input
-                        completionCostPer1K = 0.06; // GPT-4 output
-                    } else if (modelId != null && modelId.toLowerCase().contains("gpt-3.5")) {
-                        promptCostPer1K = 0.0015; // GPT-3.5-turbo input
-                        completionCostPer1K = 0.002; // GPT-3.5-turbo output
-                    } else {
-                        promptCostPer1K = 0.002; // Default OpenAI
-                        completionCostPer1K = 0.002;
-                    }
-                    break;
-                case "anthropic":
-                    if (modelId != null && modelId.toLowerCase().contains("claude-3")) {
-                        promptCostPer1K = 0.015; // Claude 3 Sonnet input
-                        completionCostPer1K = 0.075; // Claude 3 Sonnet output
-                    } else {
-                        promptCostPer1K = 0.008; // Claude 2 input
-                        completionCostPer1K = 0.024; // Claude 2 output
-                    }
-                    break;
-                case "aws":
-                case "bedrock":
-                    if (modelId != null && modelId.toLowerCase().contains("claude")) {
-                        promptCostPer1K = 0.008; // Claude on Bedrock input
-                        completionCostPer1K = 0.024; // Claude on Bedrock output
-                    } else {
-                        promptCostPer1K = 0.001; // Default AWS
-                        completionCostPer1K = 0.002;
-                    }
-                    break;
-                case "google":
-                    promptCostPer1K = 0.001; // Gemini Pro input
-                    completionCostPer1K = 0.002; // Gemini Pro output
-                    break;
-                default:
-                    // Unknown provider, use conservative estimate
-                    promptCostPer1K = 0.002;
-                    completionCostPer1K = 0.002;
-                    break;
-            }
-        }
-        
-        // Calculate total cost
-        double promptCost = (promptTokens / 1000.0) * promptCostPer1K;
-        double completionCost = (completionTokens / 1000.0) * completionCostPer1K;
-        
-        return promptCost + completionCost;
-    }
-
-    /**
-     * Safely convert Object to double value.
-     */
-    private static double getDoubleValue(Object value) {
-        if (value == null) {
-            return 0.0;
-        }
-        if (value instanceof Number) {
-            return ((Number) value).doubleValue();
-        }
-        try {
-            return Double.parseDouble(value.toString());
-        } catch (NumberFormatException e) {
-            return 0.0;
-        }
     }
 
     /**

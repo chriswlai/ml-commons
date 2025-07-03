@@ -26,6 +26,8 @@ raw-trace-pipeline:
       batch_size: 64
   processor:
     - otel_trace_raw:
+        # flatten_attributes: false
+        # output_format: "otel"
     - otel_trace_group:
         hosts: [ "http://opensearch-node1:9200" ]
         username: "admin"
@@ -36,8 +38,16 @@ raw-trace-pipeline:
         insecure: true
         username: admin
         password: MyPassword123!
-        index_type: trace-analytics-raw
+        # index_type: trace-analytics-raw
+        index_type: custom
+        index: otel-v1-apm-span-agent
+        template_file: ml_agent_trace.json
+        template_type: index-template
+        # bulk_size: 4
+        # number_of_shards: 5
+        # number_of_replicas: 1
         # template_file: /path/to/index-template.json
+        # template_file: common/src/main/resources/index-mappings/ml_agent_trace.json
 
 service-map-pipeline:
   workers: 8
