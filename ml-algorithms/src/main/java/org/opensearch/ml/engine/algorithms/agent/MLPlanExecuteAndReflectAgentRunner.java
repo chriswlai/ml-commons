@@ -471,7 +471,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
             );
             
             // Create LLM call span BEFORE making the actual LLM call
-            Map<String, String> llmCallAttrs = AgentUtils.createLLMCallAttributes(llm.getModelId(), allParams.get(PROMPT_FIELD), "", 0, null);
+            Map<String, String> llmCallAttrs = AgentUtils.createLLMCallAttributes("", 0, null, allParams);
             Span llmCallSpan = agentTracer != null ? agentTracer.startSpan("agent.llm_call", llmCallAttrs, planStepSpan) : null;
             
             // Record start time for LLM latency calculation
@@ -486,7 +486,7 @@ public class MLPlanExecuteAndReflectAgentRunner implements MLAgentRunner {
                     // Update LLM call span with actual response data using AgentUtils
                     long llmLatency = System.currentTimeMillis() - llmStartTime;
                     String completion = extractCompletionFromModelOutput(modelTensorOutput, allParams);
-                    Map<String, String> updatedLLMCallAttrs = AgentUtils.createLLMCallAttributes(llm.getModelId(), allParams.get(PROMPT_FIELD), completion, llmLatency, modelTensorOutput);
+                    Map<String, String> updatedLLMCallAttrs = AgentUtils.createLLMCallAttributes(completion, llmLatency, modelTensorOutput, allParams);
                     
                     // Update the span with the complete attributes
                     for (Map.Entry<String, String> entry : updatedLLMCallAttrs.entrySet()) {
