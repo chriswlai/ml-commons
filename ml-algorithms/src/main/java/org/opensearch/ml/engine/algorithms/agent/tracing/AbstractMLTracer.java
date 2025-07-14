@@ -20,6 +20,8 @@ public abstract class AbstractMLTracer {
         this.mlFeatureEnabledSetting = mlFeatureEnabledSetting;
     }
 
+    public abstract Span startSpan(String name, Map<String, String> attributes);
+
     public abstract Span startSpan(String name, Map<String, String> attributes, Span parentSpan);
 
     public abstract void endSpan(Span span);

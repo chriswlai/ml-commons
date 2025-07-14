@@ -126,6 +126,14 @@ public class MLAgentTracer extends AbstractMLTracer {
         return newSpan;
     }
 
+    /**
+     * Starts a new span with the given name and attributes, and no parent span.
+     * The returned span should be passed to {@link #endSpan(Span)} when the operation completes.
+     */
+    public Span startSpan(String name, Map<String, String> attributes) {
+        return startSpan(name, attributes, null);
+    }
+
     @Override
     public void endSpan(Span span) {
         if (span == null) {
