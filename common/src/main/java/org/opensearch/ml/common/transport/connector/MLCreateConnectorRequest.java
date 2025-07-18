@@ -29,15 +29,26 @@ import lombok.Getter;
 @Getter
 public class MLCreateConnectorRequest extends ActionRequest {
     private MLCreateConnectorInput mlCreateConnectorInput;
+    private Map<String, String> spanContext;
 
     @Builder
-    public MLCreateConnectorRequest(MLCreateConnectorInput mlCreateConnectorInput) {
+    public MLCreateConnectorRequest(MLCreateConnectorInput mlCreateConnectorInput, Map<String, String> spanContext) {
         this.mlCreateConnectorInput = mlCreateConnectorInput;
+        this.spanContext = spanContext;
     }
 
     public MLCreateConnectorRequest(StreamInput in) throws IOException {
         super(in);
         this.mlCreateConnectorInput = new MLCreateConnectorInput(in);
+        if (in.readBoolean()) {
+            int size = in.readVInt();
+            this.spanContext = new HashMap<>(size);
+            for (int i = 0; i < size; i++) {
+                this.spanContext.put(in.readString(), in.readString());
+            }
+        } else {
+            this.spanContext = null;
+        }
     }
 
     @Override
@@ -58,6 +69,24 @@ public class MLCreateConnectorRequest extends ActionRequest {
     public void writeTo(StreamOutput out) throws IOException {
         super.writeTo(out);
         this.mlCreateConnectorInput.writeTo(out);
+        if (spanContext != null) {
+            out.writeBoolean(true);
+            out.writeVInt(spanContext.size());
+            for (Map.Entry<String, String> entry : spanContext.entrySet()) {
+                out.writeString(entry.getKey());
+                out.writeString(entry.getValue());
+            }
+        } else {
+            out.writeBoolean(false);
+        }
+    }
+
+    public Map<String, String> getSpanContext() {
+        return spanContext;
+    }
+
+    public void setSpanContext(Map<String, String> spanContext) {
+        this.spanContext = spanContext;
     }
 
     public static MLCreateConnectorRequest fromActionRequest(ActionRequest actionRequest) {

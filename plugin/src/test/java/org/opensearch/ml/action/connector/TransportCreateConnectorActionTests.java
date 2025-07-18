@@ -499,7 +499,7 @@ public class TransportCreateConnectorActionTests extends OpenSearchTestCase {
         MLCreateConnectorInput mlCreateConnectorInput = mock(MLCreateConnectorInput.class);
         when(mlCreateConnectorInput.getName()).thenReturn(MLCreateConnectorInput.DRY_RUN_CONNECTOR_NAME);
         when(mlCreateConnectorInput.isDryRun()).thenReturn(true);
-        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput);
+        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput, null);
         action.doExecute(task, request, actionListener);
         verify(actionListener).onResponse(any(MLCreateConnectorResponse.class));
     }
@@ -526,7 +526,7 @@ public class TransportCreateConnectorActionTests extends OpenSearchTestCase {
             .credential(credential)
             .actions(actions)
             .build();
-        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput);
+        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput, null);
 
         Map<String, String> parameters = ImmutableMap.of("endpoint", "api.openai1.com");
         mlCreateConnectorInput.setParameters(parameters);
@@ -596,7 +596,7 @@ public class TransportCreateConnectorActionTests extends OpenSearchTestCase {
             .credential(credential)
             .actions(actions)
             .build();
-        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput);
+        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput, null);
         action.doExecute(task, request, actionListener);
         verify(actionListener).onResponse(any(MLCreateConnectorResponse.class));
     }
@@ -635,7 +635,7 @@ public class TransportCreateConnectorActionTests extends OpenSearchTestCase {
             .protocol(ConnectorProtocols.MCP_SSE)
             .credential(credential)
             .build();
-        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput);
+        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput, null);
         action.doExecute(task, request, actionListener);
         ArgumentCaptor<OpenSearchException> argCaptor = ArgumentCaptor.forClass(OpenSearchException.class);
         verify(actionListener).onFailure(argCaptor.capture());
@@ -700,7 +700,7 @@ public class TransportCreateConnectorActionTests extends OpenSearchTestCase {
             .actions(actions)
             .build();
 
-        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput);
+        MLCreateConnectorRequest request = new MLCreateConnectorRequest(mlCreateConnectorInput, null);
 
         action.doExecute(task, request, actionListener);
         verify(actionListener).onResponse(any(MLCreateConnectorResponse.class));

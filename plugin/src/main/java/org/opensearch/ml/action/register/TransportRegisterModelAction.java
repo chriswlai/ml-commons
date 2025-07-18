@@ -355,7 +355,7 @@ public class TransportRegisterModelAction extends HandledTransportAction<ActionR
     private MLCreateConnectorRequest createDryRunConnectorRequest(final String tenantId) {
         MLCreateConnectorInput createConnectorInput = MLCreateConnectorInput.builder().dryRun(true).build();
         createConnectorInput.setTenantId(tenantId);
-        return new MLCreateConnectorRequest(createConnectorInput);
+        return new MLCreateConnectorRequest(createConnectorInput, null);
     }
 
     private void validateInternalConnector(MLRegisterModelInput registerModelInput) {

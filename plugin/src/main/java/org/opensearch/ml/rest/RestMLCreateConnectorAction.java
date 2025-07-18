@@ -13,12 +13,14 @@ import static org.opensearch.ml.utils.TenantAwareHelper.getTenantID;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.ml.common.settings.MLFeatureEnabledSetting;
 import org.opensearch.ml.common.transport.connector.MLCreateConnectorAction;
 import org.opensearch.ml.common.transport.connector.MLCreateConnectorInput;
 import org.opensearch.ml.common.transport.connector.MLCreateConnectorRequest;
+import org.opensearch.ml.engine.algorithms.agent.tracing.MLConnectorTracer;
 import org.opensearch.rest.BaseRestHandler;
 import org.opensearch.rest.RestRequest;
 import org.opensearch.rest.action.RestToXContentListener;
@@ -52,7 +54,30 @@ public class RestMLCreateConnectorAction extends BaseRestHandler {
     @Override
     public RestChannelConsumer prepareRequest(RestRequest request, NodeClient client) throws IOException {
         MLCreateConnectorRequest mlCreateConnectorRequest = getRequest(request);
-        return channel -> client.execute(MLCreateConnectorAction.INSTANCE, mlCreateConnectorRequest, new RestToXContentListener<>(channel));
+        // Start connector trace span
+        String connectorName = mlCreateConnectorRequest.getMlCreateConnectorInput().getName();
+        String connectorType = mlCreateConnectorRequest.getMlCreateConnectorInput().getProtocol();
+        String tenantId = mlCreateConnectorRequest.getMlCreateConnectorInput().getTenantId();
+        var span = MLConnectorTracer
+            .getInstance()
+            .startSpan(
+                "connector.create",
+                MLConnectorTracer
+                    .createCreateAttributes(
+                        mlCreateConnectorRequest.getMlCreateConnectorInput(),
+                        null // user context not available at REST layer
+                    )
+            );
+        // Inject span context into request
+        Map<String, String> spanContext = new java.util.HashMap<>();
+        MLConnectorTracer.getInstance().injectSpanContext(span, spanContext);
+        mlCreateConnectorRequest.setSpanContext(spanContext);
+        try {
+            return channel -> client
+                .execute(MLCreateConnectorAction.INSTANCE, mlCreateConnectorRequest, new RestToXContentListener<>(channel));
+        } finally {
+            MLConnectorTracer.getInstance().endSpan(span);
+        }
     }
 
     /**
@@ -74,6 +99,6 @@ public class RestMLCreateConnectorAction extends BaseRestHandler {
         MLCreateConnectorInput mlCreateConnectorInput = MLCreateConnectorInput.parse(parser);
         String tenantId = getTenantID(mlFeatureEnabledSetting.isMultiTenancyEnabled(), request);
         mlCreateConnectorInput.setTenantId(tenantId);
-        return new MLCreateConnectorRequest(mlCreateConnectorInput);
+        return new MLCreateConnectorRequest(mlCreateConnectorInput, null);
     }
 }

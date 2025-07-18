@@ -87,7 +87,8 @@ public class MLFlowAgentRunner implements MLAgentRunner {
     @SuppressWarnings("removal")
     @Override
     public void run(MLAgent mlAgent, Map<String, String> params, ActionListener<Object> listener) {
-        Map<String, String> agentAttributes = AgentUtils.createAgentTaskAttributes(mlAgent.getName(), params.get(MLAgentExecutor.QUESTION));
+        Map<String, String> agentAttributes = MLAgentTracer
+            .createAgentTaskAttributes(mlAgent.getName(), params.get(MLAgentExecutor.QUESTION));
         Span agentTaskSpan = MLAgentTracer.getInstance().startSpan(MLAgentTracer.AGENT_TASK_FLOW_SPAN, agentAttributes);
 
         try {
@@ -166,7 +167,7 @@ public class MLFlowAgentRunner implements MLAgentRunner {
                         if (finalI < toolSpecs.size()) {
                             String toolType = toolSpec.getType();
                             String toolDescription = toolSpec.getDescription() != null ? toolSpec.getDescription() : toolSpec.getName();
-                            Map<String, String> toolCallAttrs = AgentUtils
+                            Map<String, String> toolCallAttrs = MLAgentTracer
                                 .createToolCallAttributesWithStep(params.get(MLAgentExecutor.QUESTION), finalI, toolType, toolDescription);
                             Span toolCallSpan = MLAgentTracer
                                 .getInstance()
@@ -203,7 +204,7 @@ public class MLFlowAgentRunner implements MLAgentRunner {
                 MLToolSpec toolSpec = toolSpecs.get(0);
                 String toolType = toolSpec.getType();
                 String toolDescription = toolSpec.getDescription() != null ? toolSpec.getDescription() : toolSpec.getName();
-                Map<String, String> toolCallAttrs = AgentUtils
+                Map<String, String> toolCallAttrs = MLAgentTracer
                     .createToolCallAttributesWithStep(params.get(MLAgentExecutor.QUESTION), 0, toolType, toolDescription);
                 Span toolCallSpan = MLAgentTracer
                     .getInstance()
@@ -232,7 +233,7 @@ public class MLFlowAgentRunner implements MLAgentRunner {
                 MLToolSpec toolSpec = toolSpecs.get(0);
                 String toolType = toolSpec.getType();
                 String toolDescription = toolSpec.getDescription() != null ? toolSpec.getDescription() : toolSpec.getName();
-                Map<String, String> toolCallAttrs = AgentUtils
+                Map<String, String> toolCallAttrs = MLAgentTracer
                     .createToolCallAttributesWithStep(params.get(MLAgentExecutor.QUESTION), 0, toolType, toolDescription);
                 Span toolCallSpan = MLAgentTracer
                     .getInstance()
