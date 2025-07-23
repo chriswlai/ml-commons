@@ -107,6 +107,7 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
 
     private Map<String, String> modelInterface;
     private String tenantId;
+    private Map<String, String> spanContext;
 
     @Builder(toBuilder = true)
     public MLRegisterModelInput(
@@ -133,7 +134,8 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
         Boolean isHidden,
         Guardrails guardrails,
         Map<String, String> modelInterface,
-        String tenantId
+        String tenantId,
+        Map<String, String> spanContext
     ) {
         this.functionName = Objects.requireNonNullElse(functionName, FunctionName.TEXT_EMBEDDING);
         if (modelName == null) {
@@ -176,6 +178,7 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
         this.guardrails = guardrails;
         this.modelInterface = modelInterface;
         this.tenantId = tenantId;
+        this.spanContext = spanContext;
     }
 
     public MLRegisterModelInput(StreamInput in) throws IOException {
@@ -240,6 +243,11 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
             }
         }
         this.tenantId = streamInputVersion.onOrAfter(VERSION_2_19_0) ? in.readOptionalString() : null;
+        if (in.readBoolean()) {
+            this.spanContext = in.readMap(StreamInput::readString, StreamInput::readString);
+        } else {
+            this.spanContext = null;
+        }
     }
 
     @Override
@@ -324,6 +332,12 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
         if (streamOutputVersion.onOrAfter(VERSION_2_19_0)) {
             out.writeOptionalString(tenantId);
         }
+        if (spanContext != null) {
+            out.writeBoolean(true);
+            out.writeMap(spanContext, StreamOutput::writeString, StreamOutput::writeString);
+        } else {
+            out.writeBoolean(false);
+        }
     }
 
     @Override
@@ -395,6 +409,9 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
         if (tenantId != null) {
             builder.field(TENANT_ID_FIELD, tenantId);
         }
+        if (spanContext != null) {
+            builder.field("span_context", spanContext);
+        }
         builder.endObject();
         return builder;
     }
@@ -422,6 +439,7 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
         Guardrails guardrails = null;
         Map<String, String> modelInterface = null;
         String tenantId = null;
+        Map<String, String> spanContext = null;
 
         ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
         while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
@@ -505,6 +523,15 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
                 case TENANT_ID_FIELD:
                     tenantId = parser.textOrNull();
                     break;
+                case "span_context":
+                    Map<String, Object> rawMap = parser.map();
+                    spanContext = new java.util.HashMap<>();
+                    for (Map.Entry<String, Object> entry : rawMap.entrySet()) {
+                        if (entry.getValue() != null) {
+                            spanContext.put(entry.getKey(), entry.getValue().toString());
+                        }
+                    }
+                    break;
                 default:
                     parser.skipChildren();
                     break;
@@ -534,7 +561,8 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
             isHidden,
             guardrails,
             modelInterface,
-            tenantId
+            tenantId,
+            spanContext
         );
     }
 
@@ -562,6 +590,7 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
         Guardrails guardrails = null;
         Map<String, String> modelInterface = null;
         String tenantId = null;
+        Map<String, String> spanContext = null;
 
         ensureExpectedToken(XContentParser.Token.START_OBJECT, parser.currentToken(), parser);
         while (parser.nextToken() != XContentParser.Token.END_OBJECT) {
@@ -652,6 +681,15 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
                 case TENANT_ID_FIELD:
                     tenantId = parser.textOrNull();
                     break;
+                case "span_context":
+                    Map<String, Object> rawMap2 = parser.map();
+                    spanContext = new java.util.HashMap<>();
+                    for (Map.Entry<String, Object> entry : rawMap2.entrySet()) {
+                        if (entry.getValue() != null) {
+                            spanContext.put(entry.getKey(), entry.getValue().toString());
+                        }
+                    }
+                    break;
                 default:
                     parser.skipChildren();
                     break;
@@ -681,7 +719,16 @@ public class MLRegisterModelInput implements ToXContentObject, Writeable {
             isHidden,
             guardrails,
             modelInterface,
-            tenantId
+            tenantId,
+            spanContext
         );
+    }
+
+    public Map<String, String> getSpanContext() {
+        return spanContext;
+    }
+
+    public void setSpanContext(Map<String, String> spanContext) {
+        this.spanContext = spanContext;
     }
 }

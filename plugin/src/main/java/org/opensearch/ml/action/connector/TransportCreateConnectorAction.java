@@ -49,6 +49,7 @@ import org.opensearch.remote.metadata.client.PutDataObjectRequest;
 import org.opensearch.remote.metadata.client.SdkClient;
 import org.opensearch.remote.metadata.common.SdkClientUtils;
 import org.opensearch.tasks.Task;
+import org.opensearch.telemetry.tracing.Span;
 import org.opensearch.transport.TransportService;
 import org.opensearch.transport.client.Client;
 
@@ -103,75 +104,61 @@ public class TransportCreateConnectorAction extends HandledTransportAction<Actio
     protected void doExecute(Task task, ActionRequest request, ActionListener<MLCreateConnectorResponse> listener) {
         MLCreateConnectorRequest mlCreateConnectorRequest = MLCreateConnectorRequest.fromActionRequest(request);
         MLCreateConnectorInput mlCreateConnectorInput = mlCreateConnectorRequest.getMlCreateConnectorInput();
-        // Extract parent span from spanContext
-        var parentSpan = MLConnectorTracer.getInstance().extractSpanContext(mlCreateConnectorRequest.getSpanContext());
-        // Child span: validation
-        var validateSpan = MLConnectorTracer
+
+        Span parentSpan = MLConnectorTracer
             .getInstance()
             .startSpan(
-                "connector.validate",
+                "connector.create",
                 MLConnectorTracer
                     .createConnectorAttributes(
                         mlCreateConnectorInput.getName(),
                         mlCreateConnectorInput.getProtocol(),
-                        mlCreateConnectorInput.getTenantId()
-                    ),
-                parentSpan
+                        mlCreateConnectorInput.isDryRun(),
+                        mlCreateConnectorInput.getVersion(),
+                        mlCreateConnectorInput.getDescription(),
+                        mlCreateConnectorInput.getParameters() != null ? mlCreateConnectorInput.getParameters().toString() : null
+                    )
             );
-        // Add more attributes to validateSpan
-        validateSpan.addAttribute("ml.connector.url", mlCreateConnectorInput.getUrl());
-        validateSpan
-            .addAttribute(
-                "ml.connector.backend_roles",
-                mlCreateConnectorInput.getBackendRoles() != null ? String.join(",", mlCreateConnectorInput.getBackendRoles()) : ""
-            );
-        validateSpan
-            .addAttribute(
-                "ml.connector.access_mode",
-                mlCreateConnectorInput.getAccess() != null ? mlCreateConnectorInput.getAccess().toString() : ""
-            );
-        validateSpan.addAttribute("ml.connector.dry_run", String.valueOf(mlCreateConnectorInput.isDryRun()));
-        validateSpan.addAttribute("ml.connector.update_connector", String.valueOf(mlCreateConnectorInput.isUpdateConnector()));
-        validateSpan.addAttribute("ml.connector.version", mlCreateConnectorInput.getVersion());
-        validateSpan.addAttribute("ml.connector.description", mlCreateConnectorInput.getDescription());
-        validateSpan
-            .addAttribute(
-                "ml.connector.parameters",
-                mlCreateConnectorInput.getParameters() != null ? mlCreateConnectorInput.getParameters().toString() : ""
-            );
-        validateSpan
-            .addAttribute(
-                "ml.connector.headers",
-                mlCreateConnectorInput.getHeaders() != null ? mlCreateConnectorInput.getHeaders().toString() : ""
-            );
-        validateSpan
-            .addAttribute(
-                "ml.connector.actions",
-                mlCreateConnectorInput.getActions() != null ? mlCreateConnectorInput.getActions().toString() : ""
-            );
-        validateSpan
-            .addAttribute(
-                "ml.connector.client_config",
-                mlCreateConnectorInput.getConnectorClientConfig() != null
-                    ? mlCreateConnectorInput.getConnectorClientConfig().toString()
-                    : ""
-            );
-        validateSpan.addAttribute("ml.connector.add_all_backend_roles", String.valueOf(mlCreateConnectorInput.getAddAllBackendRoles()));
+
         try {
-            if (mlCreateConnectorInput.getProtocol() != null
-                && mlCreateConnectorInput.getProtocol().equals(ConnectorProtocols.MCP_SSE)
-                && !this.mcpConnectorIsEnabled) {
-                listener.onFailure(new OpenSearchException(ML_COMMONS_MCP_CONNECTOR_DISABLED_MESSAGE));
-                return;
+
+            Span validateSpan = MLConnectorTracer
+                .getInstance()
+                .startSpan(
+                    "connector.validate",
+                    MLConnectorTracer
+                        .createConnectorAttributes(
+                            mlCreateConnectorInput.getName(),
+                            mlCreateConnectorInput.getProtocol(),
+                            mlCreateConnectorInput.isDryRun(),
+                            mlCreateConnectorInput.getVersion(),
+                            mlCreateConnectorInput.getDescription(),
+                            mlCreateConnectorInput.getParameters() != null ? mlCreateConnectorInput.getParameters().toString() : null
+                        ),
+                    parentSpan
+                );
+            try {
+
+                if (mlCreateConnectorInput.getProtocol() != null
+                    && mlCreateConnectorInput.getProtocol().equals(ConnectorProtocols.MCP_SSE)
+                    && !this.mcpConnectorIsEnabled) {
+                    listener.onFailure(new OpenSearchException(ML_COMMONS_MCP_CONNECTOR_DISABLED_MESSAGE));
+                    return;
+                }
+                if (!TenantAwareHelper.validateTenantId(mlFeatureEnabledSetting, mlCreateConnectorInput.getTenantId(), listener)) {
+                    return;
+                }
+                if (mlCreateConnectorInput.isDryRun()) {
+                    MLCreateConnectorResponse response = new MLCreateConnectorResponse(MLCreateConnectorInput.DRY_RUN_CONNECTOR_NAME);
+                    listener.onResponse(response);
+                    return;
+                }
+            } catch (Exception e) {
+                log.error("Error in connector.validate span", e);
+                validateSpan.setError(e);
+                MLConnectorTracer.getInstance().endSpan(validateSpan);
             }
-            if (!TenantAwareHelper.validateTenantId(mlFeatureEnabledSetting, mlCreateConnectorInput.getTenantId(), listener)) {
-                return;
-            }
-            if (mlCreateConnectorInput.isDryRun()) {
-                MLCreateConnectorResponse response = new MLCreateConnectorResponse(MLCreateConnectorInput.DRY_RUN_CONNECTOR_NAME);
-                listener.onResponse(response);
-                return;
-            }
+
             String connectorName = mlCreateConnectorInput.getName();
             try {
                 XContentBuilder builder = XContentFactory.jsonBuilder();
@@ -180,74 +167,24 @@ public class TransportCreateConnectorAction extends HandledTransportAction<Actio
                 connector.validateConnectorURL(trustedConnectorEndpointsRegex);
 
                 User user = RestActionUtils.getUserContext(client);
-                // Child span: encryption
-                var encryptionSpan = MLConnectorTracer
-                    .getInstance()
-                    .startSpan(
-                        "connector.encrypt",
-                        MLConnectorTracer
-                            .createConnectorAttributes(
-                                connectorName,
-                                mlCreateConnectorInput.getProtocol(),
-                                mlCreateConnectorInput.getTenantId()
-                            ),
-                        parentSpan
-                    );
-                encryptionSpan.addAttribute("ml.connector.tenant_id", mlCreateConnectorInput.getTenantId());
-                encryptionSpan.addAttribute("ml.connector.name", connectorName);
-                encryptionSpan.addAttribute("ml.connector.protocol", mlCreateConnectorInput.getProtocol());
-                encryptionSpan.addAttribute("ml.connector.version", mlCreateConnectorInput.getVersion());
-                encryptionSpan
-                    .addAttribute(
-                        "ml.connector.backend_roles",
-                        mlCreateConnectorInput.getBackendRoles() != null ? String.join(",", mlCreateConnectorInput.getBackendRoles()) : ""
-                    );
-                try {
-                    connector.encrypt(mlEngine::encrypt, connector.getTenantId());
-                    encryptionSpan.addAttribute("ml.encryption.result", "success");
-                } catch (Exception e) {
-                    encryptionSpan.addAttribute("ml.encryption.result", "failure");
-                    encryptionSpan.addAttribute("ml.encryption.error", e.getMessage());
-                    throw e;
-                } finally {
-                    MLConnectorTracer.getInstance().endSpan(encryptionSpan);
-                }
+
+                MLConnectorTracer.getInstance().endSpan(validateSpan);
 
                 if (connectorAccessControlHelper.accessControlNotEnabled(user)) {
                     validateSecurityDisabledOrConnectorAccessControlDisabled(mlCreateConnectorInput);
-                    // Child span: indexing
-                    var indexSpan = MLConnectorTracer
+
+                    Span indexSpan = MLConnectorTracer
                         .getInstance()
-                        .startSpan(
-                            "connector.index",
-                            MLConnectorTracer
-                                .createConnectorAttributes(
-                                    connectorName,
-                                    mlCreateConnectorInput.getProtocol(),
-                                    mlCreateConnectorInput.getTenantId()
-                                ),
-                            parentSpan
-                        );
-                    // Add more attributes to indexSpan
-                    indexSpan.addAttribute("ml.index.name", ML_CONNECTOR_INDEX);
-                    indexSpan
-                        .addAttribute(
-                            "ml.index.backend_roles",
-                            mlCreateConnectorInput.getBackendRoles() != null
-                                ? String.join(",", mlCreateConnectorInput.getBackendRoles())
-                                : ""
-                        );
-                    indexSpan.addAttribute("ml.index.tenant_id", mlCreateConnectorInput.getTenantId());
-                    indexSpan.addAttribute("ml.index.connector_name", connectorName);
-                    indexSpan.addAttribute("ml.index.protocol", mlCreateConnectorInput.getProtocol());
-                    indexSpan.addAttribute("ml.index.version", mlCreateConnectorInput.getVersion());
+                        .startSpan("connector.index", MLConnectorTracer.createIndexAttributes(ML_CONNECTOR_INDEX), parentSpan);
                     try {
                         Instant currentTime = Instant.now();
                         connector.setCreatedTime(currentTime);
                         connector.setLastUpdateTime(currentTime);
-                        indexSpan.addAttribute("ml.index.created_time", currentTime.toString());
-                        indexSpan.addAttribute("ml.index.last_updated_time", currentTime.toString());
-                        indexConnector(connector, listener);
+                        indexConnector(connector, listener, parentSpan);
+                    } catch (Exception e) {
+                        log.error("Error in connector.index span", e);
+                        indexSpan.setError(e);
+                        MLConnectorTracer.getInstance().endSpan(indexSpan);
                     } finally {
                         MLConnectorTracer.getInstance().endSpan(indexSpan);
                     }
@@ -259,39 +196,19 @@ public class TransportCreateConnectorAction extends HandledTransportAction<Actio
                     connector.setBackendRoles(mlCreateConnectorInput.getBackendRoles());
                     connector.setOwner(user);
                     connector.setAccess(mlCreateConnectorInput.getAccess());
-                    // Child span: indexing
-                    var indexSpan = MLConnectorTracer
+
+                    Span indexSpan = MLConnectorTracer
                         .getInstance()
-                        .startSpan(
-                            "connector.index",
-                            MLConnectorTracer
-                                .createConnectorAttributes(
-                                    connectorName,
-                                    mlCreateConnectorInput.getProtocol(),
-                                    mlCreateConnectorInput.getTenantId()
-                                ),
-                            parentSpan
-                        );
-                    // Add more attributes to indexSpan
-                    indexSpan.addAttribute("ml.index.name", ML_CONNECTOR_INDEX);
-                    indexSpan
-                        .addAttribute(
-                            "ml.index.backend_roles",
-                            mlCreateConnectorInput.getBackendRoles() != null
-                                ? String.join(",", mlCreateConnectorInput.getBackendRoles())
-                                : ""
-                        );
-                    indexSpan.addAttribute("ml.index.tenant_id", mlCreateConnectorInput.getTenantId());
-                    indexSpan.addAttribute("ml.index.connector_name", connectorName);
-                    indexSpan.addAttribute("ml.index.protocol", mlCreateConnectorInput.getProtocol());
-                    indexSpan.addAttribute("ml.index.version", mlCreateConnectorInput.getVersion());
+                        .startSpan("connector.index", MLConnectorTracer.createIndexAttributes(ML_CONNECTOR_INDEX), parentSpan);
                     try {
                         Instant currentTime = Instant.now();
                         connector.setCreatedTime(currentTime);
                         connector.setLastUpdateTime(currentTime);
-                        indexSpan.addAttribute("ml.index.created_time", currentTime.toString());
-                        indexSpan.addAttribute("ml.index.last_updated_time", currentTime.toString());
-                        indexConnector(connector, listener);
+                        indexConnector(connector, listener, parentSpan);
+                    } catch (Exception e) {
+                        log.error("Error in connector.index span", e);
+                        indexSpan.setError(e);
+                        MLConnectorTracer.getInstance().endSpan(indexSpan);
                     } finally {
                         MLConnectorTracer.getInstance().endSpan(indexSpan);
                     }
@@ -299,17 +216,45 @@ public class TransportCreateConnectorAction extends HandledTransportAction<Actio
             } catch (MetaDataException e) {
                 log.error("The masterKey for credential encryption is missing in connector creation");
                 listener.onFailure(e);
+                parentSpan.setError(e);
             } catch (Exception e) {
                 log.error("Failed to create connector {}", connectorName, e);
                 listener.onFailure(e);
+                parentSpan.setError(e);
             }
+        } catch (Exception e) {
+            log.error("Error in connector.create span", e);
+            parentSpan.setError(e);
         } finally {
-            MLConnectorTracer.getInstance().endSpan(validateSpan);
+            MLConnectorTracer.getInstance().endSpan(parentSpan);
         }
     }
 
-    private void indexConnector(Connector connector, ActionListener<MLCreateConnectorResponse> listener) {
-        connector.encrypt(mlEngine::encrypt, connector.getTenantId());
+    private void indexConnector(Connector connector, ActionListener<MLCreateConnectorResponse> listener, Span parentSpan) {
+        Span encryptSpan = MLConnectorTracer
+            .getInstance()
+            .startSpan(
+                "connector.encrypt",
+                MLConnectorTracer
+                    .createConnectorAttributes(
+                        connector.getName(),
+                        connector.getProtocol(),
+                        null,
+                        null,
+                        null,
+                        connector.getParameters() != null ? connector.getParameters().toString() : null
+                    ),
+                parentSpan
+            );
+        try {
+            connector.encrypt(mlEngine::encrypt, connector.getTenantId());
+        } catch (Exception e) {
+            log.error("Error in connector.encrypt span", e);
+            encryptSpan.setError(e);
+            MLConnectorTracer.getInstance().endSpan(encryptSpan);
+        } finally {
+            MLConnectorTracer.getInstance().endSpan(encryptSpan);
+        }
         log.info("connector created, indexing into the connector system index");
         mlIndicesHandler.initMLConnectorIndex(ActionListener.wrap(indexCreated -> {
             if (!indexCreated) {
