@@ -951,7 +951,7 @@ public class AgentUtils {
 
     public static Map<String, String> createAgentTaskAttributes(String agentName, String userTask) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.type", "agent");
+        attributes.put("service.type", "tracer");
         attributes.put("gen_ai.agent.name", agentName != null ? agentName : "");
         attributes.put("gen_ai.agent.task", userTask != null ? userTask : "");
         attributes.put("gen_ai.operation.name", "create_agent");
@@ -960,7 +960,7 @@ public class AgentUtils {
 
     public static Map<String, String> createPlanAttributes(int stepNumber) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.type", "agent");
+        attributes.put("service.type", "tracer");
         attributes.put("gen_ai.agent.phase", "planner");
         attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
         attributes.put("gen_ai.operation.name", "create_agent");
@@ -970,7 +970,7 @@ public class AgentUtils {
 
     public static Map<String, String> createExecuteStepAttributes(int stepNumber) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.type", "agent");
+        attributes.put("service.type", "tracer");
         attributes.put("gen_ai.agent.phase", "executor");
         attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
         attributes.put("gen_ai.operation.name", "invoke_agent");
@@ -986,7 +986,7 @@ public class AgentUtils {
         Map<String, String> attributes = new HashMap<>();
 
         String provider = detectProviderFromParameters(parameters.get("_llm_interface"));
-        attributes.put("service.type", "agent");
+        attributes.put("service.type", "tracer");
         attributes.put("gen_ai.system", provider);
         // TODO: get actual request model
         attributes.put("gen_ai.operation.name", "chat");
@@ -1131,7 +1131,7 @@ public class AgentUtils {
         String toolDescription
     ) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.type", "agent");
+        attributes.put("service.type", "tracer");
         attributes.put("gen_ai.operation.name", "execute_tool");
         attributes.put("gen_ai.agent.task", actionInput != null ? actionInput : "");
         attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));
@@ -1149,7 +1149,7 @@ public class AgentUtils {
         String llmInterface
     ) {
         Map<String, String> attributes = new HashMap<>();
-        attributes.put("service.type", "agent");
+        attributes.put("service.type", "tracer");
         attributes.put("gen_ai.operation.name", "chat");
         attributes.put("gen_ai.agent.task", question != null ? question : "");
         attributes.put("gen_ai.agent.step.number", String.valueOf(stepNumber));

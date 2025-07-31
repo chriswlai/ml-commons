@@ -358,4 +358,7 @@ public final class MLCommonsSettings {
     // Feature flag for enabling telemetry agent tracing
     public static final Setting<Boolean> ML_COMMONS_AGENT_TRACING_ENABLED = Setting
         .boolSetting("plugins.ml_commons.agent_tracing_enabled", false, Setting.Property.NodeScope, Setting.Property.Dynamic);
+
+    public static final Setting<Boolean> ML_COMMONS_CONNECTOR_TRACING_ENABLED = Setting
+        .boolSetting("plugins.ml_commons.connector_tracing_enabled", false, Setting.Property.NodeScope, Setting.Property.Dynamic);
 }
